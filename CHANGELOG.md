@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.13
+- Helligkeit, Kontrast und Sättigung korrigiert; die Bearbeitungsfunktionen wenden den gewählten Faktor jetzt tatsächlich auf das aktuelle Bild an.
+- Änderungen werden als ungespeichert erkannt. Beim Öffnen eines anderen Bildes, beim Wechsel zum vorherigen/nächsten Bild oder beim Beenden wird gefragt, ob das bearbeitete Bild gespeichert werden soll.
+- Speichern kann bestätigt, abgelehnt oder abgebrochen werden; bei „Abbrechen“ bleibt das aktuelle Bild geöffnet.
+- Zuschneiden bleibt gegenüber v0.1.12 unverändert und funktioniert weiterhin korrekt.
+- Versionsangaben auf v0.1.13 aktualisiert.
+
+
 ## 0.1.12
 - Zuschneiden korrigiert: Die tatsächliche Position des Bildes im Canvas wird bei der Auswahl berücksichtigt.
 - Der bisherige Versatz im Fit-Modus, durch den beim Zuschneiden auf der linken Seite Bildinhalt verloren gehen konnte, ist behoben.

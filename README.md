@@ -1,8 +1,6 @@
-# Bildbetrachter v0.1.12
+# Bildbetrachter v0.1.13
 
 Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tkinter und Pillow**.
-
-![Bildbetrachter](Bildbetrachter.png)
 
 ## Highlights
 
@@ -27,6 +25,7 @@ Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tk
 - Hell / Dunkel
 - Frei wählbarer Bildordner
 - Letzten verwendeten Ordner automatisch merken
+- Änderungen werden beim Bildwechsel und beim Beenden erkannt; vor dem Verlassen kann das bearbeitete Bild gespeichert werden
 
 ## Unterstützte Formate
 
@@ -42,7 +41,7 @@ PNG, JPEG/JPG, BMP, GIF, WebP und TIFF
    - Danach die Python-Installation abschließen.
 
 2. **Bildbetrachter herunterladen**
-   - Lade die Datei `Bildbetrachter_v0.1.12_GITHUB_RELEASE.zip` aus dem GitHub-Release herunter.
+   - Lade die Datei `Bildbetrachter_v0.1.13_GITHUB_RELEASE.zip` aus dem GitHub-Release herunter.
    - Entpacke die ZIP-Datei vollständig, z. B. nach `Dokumente` oder auf den Desktop.
    - Beim Entpacken entsteht der Ordner `Bild`.
 
@@ -95,7 +94,7 @@ PNG, JPEG/JPG, BMP, GIF, WebP und TIFF
 
 Eine ausführliche Anleitung befindet sich ebenfalls im Ordner:
 
-`Bildbetrachter_Anleitung_v0.1.12.pdf`
+`Bildbetrachter_Anleitung_v0.1.13.pdf`
 
 ## Installation unter Windows
 
@@ -154,11 +153,11 @@ Gespeichert werden unter anderem Sprache, Theme, Fensterstatus, Zoom, Diashow-In
 
 Die ausführliche PDF-Anleitung liegt bei:
 
-`Bildbetrachter_Anleitung_v0.1.12.pdf`
+`Bildbetrachter_Anleitung_v0.1.13.pdf`
 
 Zusätzlich ist die Anleitung direkt über **Hilfe → Anleitung** im Programm erreichbar.
 
 ## Version
 
-**Bildbetrachter v0.1.12**  
+**Bildbetrachter v0.1.13**  
 **By Goldisoft 2026**

@@ -12,7 +12,7 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageTk
 
 
 APP_NAME = "Bildbetrachter"
-APP_VERSION = "0.1.12"
+APP_VERSION = "0.1.13"
 SUPPORTED = {".bmp", ".gif", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.ini"
 LEGACY_SETTINGS_FILE = Path.home() / ".bildbetrachter_settings.json"
@@ -28,6 +28,7 @@ class ImageViewerApp:
         self.image = None
         self.original_image = None
         self.image_path = None
+        self.dirty = False
         self.photo = None
         # Position des angezeigten Bildes im Canvas. Wird für exakte
         # Koordinatenumrechnung beim Zuschneiden benötigt.
@@ -880,6 +881,8 @@ By Goldisoft 2026
         self.load_image(path)
 
     def load_image(self, path, add_history=False):
+        if not self.confirm_unsaved_changes():
+            return False
         try:
             img = Image.open(path).convert("RGBA")
             if add_history and self.image is not None:
@@ -887,6 +890,7 @@ By Goldisoft 2026
             self.image = img
             self.original_image = img.copy()
             self.image_path = str(path)
+            self.dirty = False
             self.current_folder = Path(path).parent
             self.settings["last_folder"] = str(self.current_folder)
             self.save_settings()
@@ -900,25 +904,26 @@ By Goldisoft 2026
             if getattr(self, "info_panel_visible", False):
                 self.update_image_information_panel()
             self.update_ui()
+            return True
         except Exception as exc:
             messagebox.showerror(
                 "Fehler" if self.lang == "de" else "Error",
                 f"Bild konnte nicht geöffnet werden:\n{exc}",
             )
+            return False
 
     def save_image(self):
         if self.image is None:
             self.info_no_image()
-            return
+            return False
         if not self.image_path:
-            self.save_image_as()
-            return
-        self.save_to_path(self.image_path)
+            return self.save_image_as()
+        return self.save_to_path(self.image_path)
 
     def save_image_as(self):
         if self.image is None:
             self.info_no_image()
-            return
+            return False
 
         path = filedialog.asksaveasfilename(
             title="Bild speichern unter" if self.lang == "de" else "Save image as",
@@ -934,14 +939,14 @@ By Goldisoft 2026
             ],
         )
         if not path:
-            return
+            return False
 
         ext = Path(path).suffix.lower()
         if not ext:
             ext = ".png"
             path += ext
 
-        self.save_to_path(path)
+        return self.save_to_path(path)
 
     def save_to_path(self, path):
         try:
@@ -963,14 +968,35 @@ By Goldisoft 2026
                 raise ValueError(f"Nicht unterstütztes Format: {ext}")
 
             self.image_path = str(path)
+            self.dirty = False
             self.status_var.set(
                 ("Gespeichert: " if self.lang == "de" else "Saved: ") + str(path)
             )
+            return True
         except Exception as exc:
             messagebox.showerror(
                 "Fehler" if self.lang == "de" else "Error",
                 f"Bild konnte nicht gespeichert werden:\n{exc}",
             )
+            return False
+
+    def confirm_unsaved_changes(self):
+        """Ask whether unsaved edits should be saved before leaving the image."""
+        if not self.dirty or self.image is None:
+            return True
+
+        de = self.lang == "de"
+        answer = messagebox.askyesnocancel(
+            "Bild geändert" if de else "Image changed",
+            "Das Bild wurde verändert. Soll es gespeichert werden?" if de
+            else "The image has been changed. Do you want to save it?",
+            parent=self.root,
+        )
+        if answer is True:
+            return self.save_image()
+        if answer is False:
+            return True
+        return False
 
     def load_configured_image_folder(self):
         """Make the folder saved in Settings the active folder inside the program."""
@@ -1051,6 +1077,7 @@ By Goldisoft 2026
             return
         self.push_history()
         self.image = new_image.convert("RGBA")
+        self.dirty = True
         self.zoom_factor = 1.0
         self.fit_mode = True
         self.show_image()
@@ -1061,6 +1088,7 @@ By Goldisoft 2026
             return
         self.redo_history.append(self.image.copy())
         self.image = self.history.pop()
+        self.dirty = True
         self.zoom_factor = 1.0
         self.fit_mode = True
         self.show_image()
@@ -1071,6 +1099,7 @@ By Goldisoft 2026
             return
         self.history.append(self.image.copy())
         self.image = self.redo_history.pop()
+        self.dirty = True
         self.zoom_factor = 1.0
         self.fit_mode = True
         self.show_image()
@@ -1334,7 +1363,7 @@ By Goldisoft 2026
             maxvalue=3.0,
         )
         if value is not None:
-            self.apply_edit(func(self.image, value))
+            self.apply_edit(func(value))
 
     def adjust_brightness(self):
         self.adjust("Helligkeit", "Brightness", "Faktor (1,0 = unverändert):",
@@ -1903,6 +1932,8 @@ By Goldisoft 2026
         )
 
     def on_close(self):
+        if not self.confirm_unsaved_changes():
+            return
         self.settings["geometry"] = self.root.geometry()
         if getattr(self, "current_folder", None):
             self.settings["last_folder"] = str(self.current_folder)
