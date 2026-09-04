@@ -12,8 +12,8 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageTk
 
 
 APP_NAME = "Bildbetrachter"
-APP_VERSION = "0.1.13"
-SUPPORTED = {".bmp", ".gif", ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"}
+APP_VERSION = "0.1.14"
+SUPPORTED = {".bmp", ".dib", ".gif", ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".tif", ".tiff", ".ico", ".ppm", ".pgm", ".pbm", ".pnm", ".xbm", ".xpm", ".tga", ".pcx"}
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.ini"
 LEGACY_SETTINGS_FILE = Path.home() / ".bildbetrachter_settings.json"
 
@@ -138,6 +138,23 @@ class ImageViewerApp:
                     pass
         if hasattr(self, "toolbar"):
             self.toolbar.configure(style="Toolbar.TFrame")
+            # Icons neu erzeugen, damit sie im hellen Theme dunkel und
+            # im dunklen Theme hell dargestellt werden.
+            try:
+                self._make_toolbar_icons()
+                icon_map = {
+                    "btn_open": "open", "btn_save": "save", "btn_undo": "undo",
+                    "btn_redo": "redo", "btn_left": "left", "btn_right": "right",
+                    "btn_mirror_h": "mirror_h", "btn_mirror_v": "mirror_v",
+                    "btn_fit": "fit", "btn_100": "zoom_in", "btn_full": "fullscreen",
+                    "btn_open_image_folder": "folder",
+                }
+                for button_name, icon_name in icon_map.items():
+                    button = getattr(self, button_name, None)
+                    if button is not None:
+                        button.configure(image=self.toolbar_icons[icon_name])
+            except Exception:
+                pass
         if hasattr(self, "sidebar"):
             self.sidebar.configure(style="Sidebar.TFrame")
         if hasattr(self, "sidebar_title"):
@@ -198,7 +215,7 @@ class ImageViewerApp:
         frame = tk.Frame(dialog, bg=self.colors["bg"], padx=12, pady=12)
         frame.pack(fill="both", expand=True)
 
-        guide_de = """BILDBETRACHTER v0.1.12 – ANLEITUNG
+        guide_de = """BILDBETRACHTER v0.1.14 – ANLEITUNG
 
 1. Bilder öffnen
 Über Datei → Öffnen wählst du ein Bild aus. Das Bild wird im Hauptfenster angezeigt.
@@ -262,10 +279,10 @@ Danach kann das Programm mit folgendem Befehl gestartet werden:
 python3 Bildbetrachter.py
 
 Info
-Bildbetrachter v0.1.12
+Bildbetrachter v0.1.14
 By Goldisoft 2026
 """
-        guide_en = """IMAGE VIEWER v0.1.12 – USER GUIDE
+        guide_en = """IMAGE VIEWER v0.1.14 – USER GUIDE
 
 1. Opening images
 Use File → Open to select an image. The image is displayed in the main window.
@@ -320,7 +337,7 @@ Then start the application with:
 python3 Bildbetrachter.py
 
 About
-Bildbetrachter v0.1.12
+Bildbetrachter v0.1.14
 By Goldisoft 2026
 """
         text_box = tk.Text(frame, wrap="word", font=("TkDefaultFont", 10),
@@ -350,7 +367,7 @@ By Goldisoft 2026
 
         tk.Label(
             frame,
-            text=f"Bildbetrachter v0.1.12",
+            text=f"Bildbetrachter v0.1.14",
             font=("TkDefaultFont", 16, "bold"),
             bg=self.colors["bg"], fg=self.colors["fg"]
         ).pack(pady=(0, 10))
@@ -526,7 +543,9 @@ By Goldisoft 2026
         from PIL import ImageDraw
 
         size = 34
-        fg = (235, 238, 242, 255)
+        # Helle Symbole sind im hellen Theme auf dem hellen Toolbar-Hintergrund
+        # kaum sichtbar. Im hellen Theme verwenden wir deshalb dunkle Symbole.
+        fg = (235, 238, 242, 255) if self.theme == "dark" else (55, 59, 66, 255)
         blue = (70, 150, 235, 255)
         yellow = (245, 193, 62, 255)
         green = (83, 185, 110, 255)
@@ -867,7 +886,7 @@ By Goldisoft 2026
 
     def open_image(self):
         filetypes = [
-            ("Bilddateien", "*.bmp *.gif *.jpg *.jpeg *.png *.webp *.tif *.tiff"),
+            ("Bilddateien", "*.bmp *.dib *.gif *.jpg *.jpeg *.jpe *.jfif *.png *.webp *.tif *.tiff *.ico *.ppm *.pgm *.pbm *.pnm *.xbm *.xpm *.tga *.pcx"),
             ("Alle Dateien", "*.*"),
         ]
         initialdir = self.get_start_folder()
@@ -936,6 +955,15 @@ By Goldisoft 2026
                 ("WebP", "*.webp"),
                 ("TIFF", "*.tif"),
                 ("TIFF", "*.tiff"),
+                ("ICO", "*.ico"),
+                ("PPM", "*.ppm"),
+                ("PGM", "*.pgm"),
+                ("PBM", "*.pbm"),
+                ("PNM", "*.pnm"),
+                ("XBM", "*.xbm"),
+                ("XPM", "*.xpm"),
+                ("TGA", "*.tga"),
+                ("PCX", "*.pcx"),
             ],
         )
         if not path:
@@ -964,6 +992,20 @@ By Goldisoft 2026
                 image.save(path, "TIFF")
             elif ext == ".png":
                 image.save(path, "PNG")
+            elif ext == ".ico":
+                image.save(path, "ICO")
+            elif ext in (".ppm", ".pgm", ".pbm", ".pnm"):
+                image.convert("RGB").save(path, ext[1:].upper())
+            elif ext in (".xbm", ".xpm"):
+                image.convert("RGB").save(path, ext[1:].upper())
+            elif ext == ".tga":
+                image.save(path, "TGA")
+            elif ext == ".pcx":
+                image.convert("RGB").save(path, "PCX")
+            elif ext == ".dib":
+                image.convert("RGB").save(path, "BMP")
+            elif ext in (".jpe", ".jfif"):
+                image.convert("RGB").save(path, "JPEG", quality=95)
             else:
                 raise ValueError(f"Nicht unterstütztes Format: {ext}")
 

@@ -1,8 +1,6 @@
-# Bildbetrachter v0.1.13
+# Bildbetrachter v0.1.14
 
 Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tkinter und Pillow**.
-
-![Bildbetrachter](Bildbetrachter.png)
 
 ## Highlights
 
@@ -43,7 +41,7 @@ PNG, JPEG/JPG, BMP, GIF, WebP und TIFF
    - Danach die Python-Installation abschließen.
 
 2. **Bildbetrachter herunterladen**
-   - Lade die Datei `Bildbetrachter_v0.1.13_GITHUB_RELEASE.zip` aus dem GitHub-Release herunter.
+   - Lade die Datei `Bildbetrachter_v0.1.14_GITHUB_RELEASE.zip` aus dem GitHub-Release herunter.
    - Entpacke die ZIP-Datei vollständig, z. B. nach `Dokumente` oder auf den Desktop.
    - Beim Entpacken entsteht der Ordner `Bild`.
 
@@ -96,7 +94,7 @@ PNG, JPEG/JPG, BMP, GIF, WebP und TIFF
 
 Eine ausführliche Anleitung befindet sich ebenfalls im Ordner:
 
-`Bildbetrachter_Anleitung_v0.1.13.pdf`
+`Bildbetrachter_Anleitung_v0.1.14.pdf`
 
 ## Installation unter Windows
 
@@ -155,11 +153,21 @@ Gespeichert werden unter anderem Sprache, Theme, Fensterstatus, Zoom, Diashow-In
 
 Die ausführliche PDF-Anleitung liegt bei:
 
-`Bildbetrachter_Anleitung_v0.1.13.pdf`
+`Bildbetrachter_Anleitung_v0.1.14.pdf`
 
 Zusätzlich ist die Anleitung direkt über **Hilfe → Anleitung** im Programm erreichbar.
 
 ## Version
 
-**Bildbetrachter v0.1.13**  
+**Bildbetrachter v0.1.14**  
 **By Goldisoft 2026**
+
+## v0.1.14 – weitere Verbesserung
+
+- Toolbar-Symbole sind im hellen Modus jetzt gut sichtbar und passen sich beim Theme-Wechsel automatisch an.
+
+## Unterstützte Bildformate in v0.1.14
+
+Öffnen: BMP/DIB, JPEG (JPG/JPEG/JPE/JFIF), PNG, GIF, WebP, TIFF, ICO, PPM, PGM, PBM, PNM, XBM, XPM, TGA und PCX.
+
+Die genannten Formate basieren auf den direkt von Pillow bereitgestellten Standardformaten; Formate mit zusätzlichen externen Codec-Abhängigkeiten werden bewusst nicht vorausgesetzt.
