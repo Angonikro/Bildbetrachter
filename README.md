@@ -2,6 +2,8 @@
 
 Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tkinter und Pillow**.
 
+![Bildbetrachter](Bildbetrachter.png)
+
 ## Highlights
 
 - Moderne Symbolleiste mit Symbolen und Beschriftungen
