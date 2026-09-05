@@ -33,6 +33,8 @@ Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tk
 
 PNG, JPEG/JPG, BMP, GIF, WebP und TIFF
 
+[Github Seite](https://github.com/Angonikro/Bildbetrachter/)
+
 ## Installation
 
 ### Windows
