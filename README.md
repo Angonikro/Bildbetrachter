@@ -1,8 +1,6 @@
-# Bildbetrachter v0.1.14
+# Bildbetrachter v0.1.15
 
 Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tkinter und Pillow**.
-
-![Bildbetrachter](Bildbetrachter.png)
 
 ## Highlights
 
@@ -13,7 +11,7 @@ Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tk
 - Klick auf ein Vorschaubild öffnet das Bild in der großen Hauptanzeige
 - Optionales Fenster **Datei → Bildinformationen...**; erscheint nur auf ausdrücklichen Aufruf und kann geschlossen werden
 - Gespeicherten Bildordner direkt als aktuellen Ordner laden
-- Rückgängig / Wiederholen
+- Rückgängig / Wiederholen (auch für Zeichnungen)
 - Zuschneiden und Größe ändern
 - Drehen und Spiegeln
 - Helligkeit, Kontrast und Sättigung
@@ -33,8 +31,6 @@ Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tk
 
 PNG, JPEG/JPG, BMP, GIF, WebP und TIFF
 
-[Github Seite](https://github.com/Angonikro/Bildbetrachter/)
-
 ## Installation
 
 ### Windows
@@ -45,7 +41,7 @@ PNG, JPEG/JPG, BMP, GIF, WebP und TIFF
    - Danach die Python-Installation abschließen.
 
 2. **Bildbetrachter herunterladen**
-   - Lade die Datei `Bildbetrachter_v0.1.14_GITHUB_RELEASE.zip` aus dem GitHub-Release herunter.
+   - Lade die Datei `Bildbetrachter_v0.1.15_GITHUB_RELEASE.zip` aus dem GitHub-Release herunter.
    - Entpacke die ZIP-Datei vollständig, z. B. nach `Dokumente` oder auf den Desktop.
    - Beim Entpacken entsteht der Ordner `Bild`.
 
@@ -98,7 +94,7 @@ PNG, JPEG/JPG, BMP, GIF, WebP und TIFF
 
 Eine ausführliche Anleitung befindet sich ebenfalls im Ordner:
 
-`Bildbetrachter_Anleitung_v0.1.14.pdf`
+`Bildbetrachter_Anleitung_v0.1.15.pdf`
 
 ## Installation unter Windows
 
@@ -133,6 +129,7 @@ Die wichtigsten Kürzel werden direkt rechts neben den Menüeinträgen angezeigt
 - `Ctrl+P` – Drucken
 - `Ctrl+Z` / `Ctrl+Y` – Rückgängig / Wiederholen
 - `Ctrl+Shift+X` – Zuschneiden
+- `Ctrl+D` – Zeichnen
 - `Ctrl+E` – Größe ändern
 - `Ctrl+F` – An Fenster anpassen
 - `Ctrl+0` – 100 %
@@ -157,21 +154,27 @@ Gespeichert werden unter anderem Sprache, Theme, Fensterstatus, Zoom, Diashow-In
 
 Die ausführliche PDF-Anleitung liegt bei:
 
-`Bildbetrachter_Anleitung_v0.1.14.pdf`
+`Bildbetrachter_Anleitung_v0.1.15.pdf`
 
 Zusätzlich ist die Anleitung direkt über **Hilfe → Anleitung** im Programm erreichbar.
 
 ## Version
 
-**Bildbetrachter v0.1.14**  
+**Bildbetrachter v0.1.15**  
 **By Goldisoft 2026**
 
-## v0.1.14 – weitere Verbesserung
+## v0.1.15 – weitere Verbesserung
 
 - Toolbar-Symbole sind im hellen Modus jetzt gut sichtbar und passen sich beim Theme-Wechsel automatisch an.
 
-## Unterstützte Bildformate in v0.1.14
+## Unterstützte Bildformate in v0.1.15
 
 Öffnen: BMP/DIB, JPEG (JPG/JPEG/JPE/JFIF), PNG, GIF, WebP, TIFF, ICO, PPM, PGM, PBM, PNM, XBM, XPM, TGA und PCX.
 
 Die genannten Formate basieren auf den direkt von Pillow bereitgestellten Standardformaten; Formate mit zusätzlichen externen Codec-Abhängigkeiten werden bewusst nicht vorausgesetzt.
+
+## v0.1.15
+
+- Zeichnen: **Bearbeiten → Zeichnen...** (`Ctrl+D`).
+- Zeichnungen sind vollständig in Rückgängig/Wiederholen eingebunden.
+- Theme: eigener Hauptmenüpunkt **Theme → Dunkel/Hell**; nicht mehr unter Einstellungen.

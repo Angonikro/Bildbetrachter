@@ -1,4 +1,11 @@
-## v0.1.14
+Bildbetrachter
+
+## v0.1.15
+
+- Zeichnen mit eingebaut
+### Fehlerbehebung
+- Zeichnungen werden jetzt korrekt in den Rückgängig-/Wiederholen-Verlauf übernommen.
+- Nach dem ersten Zeichenstrich wird die Rückgängig-/Wiederholen-Funktion sofort aktualisiert.
 
 ### Fehlerbehebung
 - Toolbar-Symbole sind im hellen Theme jetzt deutlich sichtbar.
@@ -6,7 +13,7 @@
 
 # CHANGELOG
 
-## v0.1.14
+## v0.1.15
 - Erweiterte Bildformat-Unterstützung für robuste, in Pillow standardmäßig verfügbare Formate.
 - Öffnen-Dialog erkennt jetzt BMP/DIB, JPEG-Varianten, PNG, GIF, WebP, TIFF, ICO, PPM/PGM/PBM/PNM, XBM/XPM, TGA und PCX.
 - Speichern unter unterstützt die zusätzlichen Formate, soweit sie von Pillow direkt bereitgestellt werden.

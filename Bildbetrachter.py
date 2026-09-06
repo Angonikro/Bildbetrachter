@@ -12,7 +12,7 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageTk
 
 
 APP_NAME = "Bildbetrachter"
-APP_VERSION = "0.1.14"
+APP_VERSION = "0.1.15"
 SUPPORTED = {".bmp", ".dib", ".gif", ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".tif", ".tiff", ".ico", ".ppm", ".pgm", ".pbm", ".pnm", ".xbm", ".xpm", ".tga", ".pcx"}
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.ini"
 LEGACY_SETTINGS_FILE = Path.home() / ".bildbetrachter_settings.json"
@@ -215,7 +215,7 @@ class ImageViewerApp:
         frame = tk.Frame(dialog, bg=self.colors["bg"], padx=12, pady=12)
         frame.pack(fill="both", expand=True)
 
-        guide_de = """BILDBETRACHTER v0.1.14 – ANLEITUNG
+        guide_de = """BILDBETRACHTER v0.1.15 – ANLEITUNG
 
 1. Bilder öffnen
 Über Datei → Öffnen wählst du ein Bild aus. Das Bild wird im Hauptfenster angezeigt.
@@ -279,10 +279,10 @@ Danach kann das Programm mit folgendem Befehl gestartet werden:
 python3 Bildbetrachter.py
 
 Info
-Bildbetrachter v0.1.14
+Bildbetrachter v0.1.15
 By Goldisoft 2026
 """
-        guide_en = """IMAGE VIEWER v0.1.14 – USER GUIDE
+        guide_en = """IMAGE VIEWER v0.1.15 – USER GUIDE
 
 1. Opening images
 Use File → Open to select an image. The image is displayed in the main window.
@@ -337,7 +337,7 @@ Then start the application with:
 python3 Bildbetrachter.py
 
 About
-Bildbetrachter v0.1.14
+Bildbetrachter v0.1.15
 By Goldisoft 2026
 """
         text_box = tk.Text(frame, wrap="word", font=("TkDefaultFont", 10),
@@ -367,7 +367,7 @@ By Goldisoft 2026
 
         tk.Label(
             frame,
-            text=f"Bildbetrachter v0.1.14",
+            text=f"Bildbetrachter v0.1.15",
             font=("TkDefaultFont", 16, "bold"),
             bg=self.colors["bg"], fg=self.colors["fg"]
         ).pack(pady=(0, 10))
@@ -433,6 +433,7 @@ By Goldisoft 2026
         self.image_menu = tk.Menu(self.menubar, tearoff=0)
         self.tools_menu = tk.Menu(self.menubar, tearoff=0)
         self.help_menu = tk.Menu(self.menubar, tearoff=0)
+        self.theme_menu = tk.Menu(self.menubar, tearoff=0)
 
         self.file_menu.add_command(
             label="Öffnen..." if de else "Open...", command=self.open_image, accelerator="Ctrl+O")
@@ -460,6 +461,8 @@ By Goldisoft 2026
         self.edit_menu.add_separator()
         self.edit_menu.add_command(
             label="Zuschneiden" if de else "Crop", command=self.start_crop_mode, accelerator="Ctrl+Shift+X")
+        self.edit_menu.add_command(
+            label="Zeichnen..." if de else "Draw...", command=self.start_draw_mode, accelerator="Ctrl+D")
         self.edit_menu.add_command(
             label="Größe ändern" if de else "Resize", command=self.resize_image_dialog, accelerator="Ctrl+E")
 
@@ -522,6 +525,13 @@ By Goldisoft 2026
             label="Einstellungen" if de else "Settings",
             command=self.show_settings)
 
+        self.theme_menu.add_command(
+            label="Dunkel" if de else "Dark",
+            command=lambda: self.set_theme("dark"))
+        self.theme_menu.add_command(
+            label="Hell" if de else "Light",
+            command=lambda: self.set_theme("light"))
+
         self.help_menu.add_command(
             label="Anleitung" if de else "User Guide",
             command=self.show_manual)
@@ -536,6 +546,7 @@ By Goldisoft 2026
         self.menubar.add_cascade(label="Ansicht" if de else "View", menu=self.view_menu)
         self.menubar.add_cascade(label="Bild" if de else "Image", menu=self.image_menu)
         self.menubar.add_cascade(label="Werkzeuge" if de else "Tools", menu=self.tools_menu)
+        self.menubar.add_cascade(label="Theme", menu=self.theme_menu)
         self.menubar.add_cascade(label="Hilfe" if de else "Help", menu=self.help_menu)
 
     def _make_toolbar_icons(self):
@@ -755,6 +766,11 @@ By Goldisoft 2026
 
         self.crop_start = None
         self.crop_rect = None
+        self.draw_mode = False
+        self.draw_color = "#ff0000"
+        self.draw_size = 5
+        self.draw_last_point = None
+        self.draw_stroke_active = False
 
     def bind_keys(self):
         # Tastenkürzel der Menüpunkte. Die gleichen Kürzel werden zusätzlich
@@ -768,6 +784,7 @@ By Goldisoft 2026
             "<Control-y>": self.redo,
             "<Control-Shift-z>": self.redo,
             "<Control-Shift-x>": self.start_crop_mode,
+            "<Control-d>": self.start_draw_mode,
             "<Control-e>": self.resize_image_dialog,
             "<Control-f>": self.fit_to_window,
             "<Control-Key-0>": self.zoom_100,
@@ -1293,6 +1310,138 @@ By Goldisoft 2026
         self.canvas.bind("<B1-Motion>", self.pan_move)
         self.canvas.unbind("<ButtonRelease-1>")
 
+    # ---------- Drawing ----------
+
+    def start_draw_mode(self):
+        if self.image is None:
+            self.info_no_image()
+            return
+        de = self.lang == "de"
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Zeichnen" if de else "Draw")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        frame = tk.Frame(dialog, bg=self.colors["bg"], padx=18, pady=16)
+        frame.pack(fill="both", expand=True)
+
+        tk.Label(frame, text="Zeichenfarbe:" if de else "Drawing color:",
+                 bg=self.colors["bg"], fg=self.colors["fg"]).grid(row=0,column=0,sticky="w",pady=5)
+        color_var=tk.StringVar(value=self.draw_color)
+        preview=tk.Label(frame,textvariable=color_var,width=12,bg=self.draw_color,fg="#ffffff",relief="solid",bd=1)
+        preview.grid(row=0,column=1,padx=8,pady=5)
+
+        def choose_color():
+            result=colorchooser.askcolor(color=self.draw_color,
+                title="Zeichenfarbe auswählen" if de else "Choose drawing color",parent=dialog)
+            if result and result[1]:
+                self.draw_color=result[1]
+                color_var.set(self.draw_color)
+                preview.configure(bg=self.draw_color)
+
+        tk.Button(frame,text="Farbe wählen..." if de else "Choose color...",command=choose_color,
+                  bg=self.colors["surface2"],fg=self.colors["fg"],
+                  activebackground=self.colors["active"],activeforeground=self.colors["fg"],
+                  relief="flat",bd=0,padx=10,pady=5).grid(row=0,column=2,pady=5)
+
+        tk.Label(frame,text="Pinselgröße (Pixel):" if de else "Brush size (pixels):",
+                 bg=self.colors["bg"],fg=self.colors["fg"]).grid(row=1,column=0,sticky="w",pady=5)
+        size_var=tk.IntVar(value=self.draw_size)
+        tk.Spinbox(frame,from_=1,to=100,width=8,textvariable=size_var,
+                   bg=self.colors["surface"],fg=self.colors["fg"],
+                   insertbackground=self.colors["fg"]).grid(row=1,column=1,sticky="w",padx=8,pady=5)
+
+        tk.Label(frame,text=("Linke Maustaste gedrückt halten und zeichnen. Rechtsklick oder Esc beendet."
+                             if de else "Hold left mouse button to draw. Right-click or Esc ends drawing."),
+                 bg=self.colors["bg"],fg=self.colors["muted"],wraplength=430,justify="left"
+        ).grid(row=2,column=0,columnspan=3,sticky="w",pady=(10,14))
+
+        def activate():
+            try: self.draw_size=max(1,min(100,int(size_var.get())))
+            except (ValueError,tk.TclError): self.draw_size=5
+            dialog.destroy()
+            self._enter_draw_mode()
+        tk.Button(frame,text="Zeichenmodus starten" if de else "Start drawing",command=activate,
+                  bg=self.colors["surface2"],fg=self.colors["fg"],
+                  activebackground=self.colors["active"],activeforeground=self.colors["fg"],
+                  relief="flat",bd=0,padx=12,pady=6).grid(row=3,column=1,sticky="e")
+        dialog.bind("<Escape>",lambda _e:dialog.destroy())
+
+    def _enter_draw_mode(self):
+        self.draw_mode=True
+        self.draw_last_point=None
+        self.draw_stroke_active=False
+        self.canvas.configure(cursor="pencil")
+        self.canvas.unbind("<ButtonPress-1>")
+        self.canvas.unbind("<B1-Motion>")
+        self.canvas.unbind("<ButtonRelease-1>")
+        self.canvas.bind("<ButtonPress-1>",self.draw_start_event)
+        self.canvas.bind("<B1-Motion>",self.draw_move_event)
+        self.canvas.bind("<ButtonRelease-1>",self.draw_finish_event)
+        self.canvas.bind("<Button-3>",self._draw_cancel_event)
+
+    def _exit_draw_mode(self):
+        self.draw_mode=False
+        self.draw_last_point=None
+        self.draw_stroke_active=False
+        self.canvas.configure(cursor="")
+        self.canvas.unbind("<ButtonPress-1>")
+        self.canvas.unbind("<B1-Motion>")
+        self.canvas.unbind("<ButtonRelease-1>")
+        self.canvas.unbind("<Button-3>")
+        self.canvas.bind("<ButtonPress-1>",self.pan_start)
+        self.canvas.bind("<B1-Motion>",self.pan_move)
+
+    def _draw_cancel_event(self,_event=None):
+        self._exit_draw_mode()
+        return "break"
+
+    def _canvas_to_image_point(self,event):
+        if self.image is None or not self.zoom_factor: return None
+        x=self.canvas.canvasx(event.x); y=self.canvas.canvasy(event.y)
+        left=self.image_display_x; top=self.image_display_y
+        right=left+self.image.width*self.zoom_factor
+        bottom=top+self.image.height*self.zoom_factor
+        if x<left or y<top or x>right or y>bottom: return None
+        return (max(0,min(self.image.width-1,int((x-left)/self.zoom_factor))),
+                max(0,min(self.image.height-1,int((y-top)/self.zoom_factor))))
+
+    def draw_start_event(self,event):
+        point=self._canvas_to_image_point(event)
+        if not self.draw_mode or point is None: return "break"
+        self.push_history()
+        self.draw_last_point=point
+        self.draw_stroke_active=True
+        from PIL import ImageDraw
+        d=ImageDraw.Draw(self.image); r=max(0,self.draw_size//2); x,y=point
+        d.ellipse((x-r,y-r,x+r,y+r),fill=self.draw_color)
+        self.dirty=True
+        self.show_image()
+        # Das Rückgängig-/Wiederholen-UI muss sofort aktualisiert werden.
+        # Ohne diesen Aufruf bleibt Rückgängig nach dem ersten Zeichenstrich
+        # optisch/deaktiviert, obwohl der Verlauf bereits gespeichert wurde.
+        self.update_ui()
+        return "break"
+
+    def draw_move_event(self,event):
+        if not self.draw_mode or not self.draw_stroke_active or self.draw_last_point is None: return "break"
+        point=self._canvas_to_image_point(event)
+        if point is None: return "break"
+        from PIL import ImageDraw
+        d=ImageDraw.Draw(self.image); w=max(1,int(self.draw_size))
+        d.line([self.draw_last_point,point],fill=self.draw_color,width=w)
+        r=w//2; x,y=point
+        d.ellipse((x-r,y-r,x+r,y+r),fill=self.draw_color)
+        self.draw_last_point=point
+        self.dirty=True
+        self.show_image()
+        return "break"
+
+    def draw_finish_event(self,_event):
+        self.draw_last_point=None
+        self.draw_stroke_active=False
+        self.update_ui()
+        return "break"
+
     # ---------- Image operations ----------
 
     def rotate(self, degrees):
@@ -1608,6 +1757,16 @@ By Goldisoft 2026
                 f"Hintergrundbild konnte nicht gesetzt werden:\n{exc}",
             )
 
+    def set_theme(self, theme):
+        if theme not in ("dark", "light"):
+            return
+        self.theme = theme
+        self.settings["theme"] = theme
+        self.save_settings()
+        self.apply_theme()
+        self.rebuild_menu()
+        self.update_ui()
+
     # ---------- Settings ----------
 
     def load_settings(self):
@@ -1678,22 +1837,6 @@ By Goldisoft 2026
         frame = tk.Frame(dialog, bg=self.colors["bg"], padx=22, pady=20)
         frame.pack(fill="both", expand=True)
 
-        tk.Label(frame, text="Darstellung" if de else "Appearance",
-                 bg=self.colors["bg"], fg=self.colors["fg"],
-                 font=("TkDefaultFont", 12, "bold")).grid(
-                     row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
-
-        tk.Label(frame, text="Theme:",
-                 bg=self.colors["bg"], fg=self.colors["fg"]).grid(
-                     row=1, column=0, sticky="w", padx=(0, 14), pady=4)
-
-        theme_var = tk.StringVar(value=self.theme)
-        combo = ttk.Combobox(
-            frame, textvariable=theme_var, state="readonly", width=18,
-            values=["Dunkel" if de else "Dark", "Hell" if de else "Light"])
-        combo.grid(row=1, column=1, columnspan=2, sticky="ew", pady=4)
-        combo.current(0 if self.theme == "dark" else 1)
-
         tk.Label(frame, text="Bildordner" if de else "Image folder",
                  bg=self.colors["bg"], fg=self.colors["fg"],
                  font=("TkDefaultFont", 12, "bold")).grid(
@@ -1749,10 +1892,6 @@ By Goldisoft 2026
         ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 14))
 
         def apply_and_close():
-            selected_theme = theme_var.get()
-            dark = selected_theme in ("Dunkel", "Dark")
-            self.theme = "dark" if dark else "light"
-            self.settings["theme"] = self.theme
 
             folder = folder_var.get().strip()
             if folder and Path(folder).expanduser().is_dir():
@@ -1769,7 +1908,6 @@ By Goldisoft 2026
                 return
 
             self.save_settings()
-            self.apply_theme()
             self.build_menu()
             self.update_ui()
             dialog.destroy()
@@ -1781,20 +1919,6 @@ By Goldisoft 2026
 
         folder_entry.focus_set()
 
-
-        def select_theme(_event=None):
-            value = "dark" if combo.current() == 0 else "light"
-            self.theme = value
-            self.settings["theme"] = value
-            self.save_settings()
-            self.apply_theme()
-            dialog.configure(bg=self.colors["bg"])
-            frame.configure(bg=self.colors["bg"])
-            for child in frame.winfo_children():
-                if isinstance(child, tk.Label):
-                    child.configure(bg=self.colors["bg"], fg=self.colors["fg"])
-
-        combo.bind("<<ComboboxSelected>>", select_theme)
 
         tk.Label(frame, text="Bildordner" if de else "Image folder",
                  bg=self.colors["bg"], fg=self.colors["fg"],
