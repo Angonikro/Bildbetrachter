@@ -2,6 +2,10 @@
 
 Ein kompakter Bildbetrachter und einfacher Bildeditor auf Basis von **Python, Tkinter und Pillow**.
 
+![Bildbetrachter](Bildbetrachter.png)
+
+[Github Seite](https://github.com/Angonikro/Bildbetrachter/)
+
 ## Highlights
 
 - Moderne Symbolleiste mit Symbolen und Beschriftungen
