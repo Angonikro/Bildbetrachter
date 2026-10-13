@@ -1,8 +1,16 @@
-Bildbetrachter
+## 0.1.16
+- Anleitung und Info-Dialog zeigen jetzt korrekt Version 0.1.16.
+
+# CHANGELOG
+
+## v0.1.16
+- Einstellungen werden benutzerspezifisch unter `~/.config/bildbetrachter/settings.ini` gespeichert (XDG_CONFIG_HOME wird unterstützt).
+- Bestehende `settings.ini` im Programmordner und ältere JSON-Einstellungen werden beim ersten Start automatisch übernommen, wenn noch keine neue Konfiguration existiert.
+- Die Migration löscht die alten Dateien nicht.
+- Debian-Paket mit Menüeintrag und Anwendungssymbol ergänzt.
 
 ## v0.1.15
 
-- Zeichnen mit eingebaut
 ### Fehlerbehebung
 - Zeichnungen werden jetzt korrekt in den Rückgängig-/Wiederholen-Verlauf übernommen.
 - Nach dem ersten Zeichenstrich wird die Rückgängig-/Wiederholen-Funktion sofort aktualisiert.
@@ -11,7 +19,6 @@ Bildbetrachter
 - Toolbar-Symbole sind im hellen Theme jetzt deutlich sichtbar.
 - Symbole werden beim Wechsel zwischen hellem und dunklem Theme automatisch passend neu aufgebaut.
 
-# CHANGELOG
 
 ## v0.1.15
 - Erweiterte Bildformat-Unterstützung für robuste, in Pillow standardmäßig verfügbare Formate.

@@ -12,10 +12,12 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageTk
 
 
 APP_NAME = "Bildbetrachter"
-APP_VERSION = "0.1.15"
+APP_VERSION = "0.1.16"
 SUPPORTED = {".bmp", ".dib", ".gif", ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".tif", ".tiff", ".ico", ".ppm", ".pgm", ".pbm", ".pnm", ".xbm", ".xpm", ".tga", ".pcx"}
-SETTINGS_FILE = Path(__file__).resolve().parent / "settings.ini"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "bildbetrachter"
+SETTINGS_FILE = CONFIG_DIR / "settings.ini"
 LEGACY_SETTINGS_FILE = Path.home() / ".bildbetrachter_settings.json"
+LEGACY_LOCAL_SETTINGS_FILE = Path(__file__).resolve().parent / "settings.ini"
 
 
 class ImageViewerApp:
@@ -215,7 +217,7 @@ class ImageViewerApp:
         frame = tk.Frame(dialog, bg=self.colors["bg"], padx=12, pady=12)
         frame.pack(fill="both", expand=True)
 
-        guide_de = """BILDBETRACHTER v0.1.15 – ANLEITUNG
+        guide_de = """BILDBETRACHTER v0.1.16 – ANLEITUNG
 
 1. Bilder öffnen
 Über Datei → Öffnen wählst du ein Bild aus. Das Bild wird im Hauptfenster angezeigt.
@@ -279,10 +281,10 @@ Danach kann das Programm mit folgendem Befehl gestartet werden:
 python3 Bildbetrachter.py
 
 Info
-Bildbetrachter v0.1.15
+Bildbetrachter v0.1.16
 By Goldisoft 2026
 """
-        guide_en = """IMAGE VIEWER v0.1.15 – USER GUIDE
+        guide_en = """IMAGE VIEWER v0.1.16 – USER GUIDE
 
 1. Opening images
 Use File → Open to select an image. The image is displayed in the main window.
@@ -337,7 +339,7 @@ Then start the application with:
 python3 Bildbetrachter.py
 
 About
-Bildbetrachter v0.1.15
+Bildbetrachter v0.1.16
 By Goldisoft 2026
 """
         text_box = tk.Text(frame, wrap="word", font=("TkDefaultFont", 10),
@@ -367,7 +369,7 @@ By Goldisoft 2026
 
         tk.Label(
             frame,
-            text=f"Bildbetrachter v0.1.15",
+            text=f"Bildbetrachter v0.1.16",
             font=("TkDefaultFont", 16, "bold"),
             bg=self.colors["bg"], fg=self.colors["fg"]
         ).pack(pady=(0, 10))
@@ -1775,10 +1777,16 @@ By Goldisoft 2026
             "geometry": "", "window_width": 1200, "window_height": 760,
             "maximized": False, "zoom": 100, "slideshow_interval": 3,
         }
-        try:
-            if SETTINGS_FILE.exists():
+
+        # Prefer the per-user XDG config file. On first run, migrate the old
+        # program-directory INI or the older JSON file without deleting either.
+        source = SETTINGS_FILE if SETTINGS_FILE.exists() else None
+        if source is None and LEGACY_LOCAL_SETTINGS_FILE.exists():
+            source = LEGACY_LOCAL_SETTINGS_FILE
+        if source is not None:
+            try:
                 cfg = configparser.ConfigParser()
-                cfg.read(SETTINGS_FILE, encoding="utf-8")
+                cfg.read(source, encoding="utf-8")
                 sec = cfg["General"] if "General" in cfg else {}
                 for key in ("language", "theme", "last_folder", "image_folder", "geometry"):
                     if key in sec:
@@ -1787,44 +1795,51 @@ By Goldisoft 2026
                     if key in sec:
                         try:
                             defaults[key] = int(sec.get(key))
-                        except ValueError:
+                        except (ValueError, TypeError):
                             pass
                 if "maximized" in sec:
                     defaults["maximized"] = sec.getboolean("maximized", fallback=False)
+                if source != SETTINGS_FILE:
+                    self._write_settings_file(defaults)
                 return defaults
-        except Exception:
-            pass
+            except Exception:
+                pass
 
-        # Migrate the older JSON settings file when present.
         try:
             if LEGACY_SETTINGS_FILE.exists():
                 data = json.loads(LEGACY_SETTINGS_FILE.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
                     defaults.update({k: v for k, v in data.items() if k in defaults})
+                    self._write_settings_file(defaults)
         except Exception:
             pass
         return defaults
 
+    def _write_settings_file(self, values):
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        cfg = configparser.ConfigParser()
+        cfg["General"] = {
+            "language": str(values.get("language", "de")),
+            "theme": str(values.get("theme", "dark")),
+            "last_folder": str(values.get("last_folder", "")),
+            "image_folder": str(values.get("image_folder", "")),
+            "geometry": str(values.get("geometry", "")),
+            "window_width": str(values.get("window_width", 1200)),
+            "window_height": str(values.get("window_height", 760)),
+            "maximized": str(bool(values.get("maximized", False))),
+            "zoom": str(values.get("zoom", 100)),
+            "slideshow_interval": str(values.get("slideshow_interval", 3)),
+        }
+        with SETTINGS_FILE.open("w", encoding="utf-8") as handle:
+            handle.write("; Bildbetrachter Einstellungen\n")
+            cfg.write(handle)
+
     def save_settings(self):
         try:
-            cfg = configparser.ConfigParser()
-            cfg["General"] = {
-                "language": str(self.settings.get("language", self.lang)),
-                "theme": str(self.settings.get("theme", self.theme)),
-                "last_folder": str(self.settings.get("last_folder", "")),
-                "image_folder": str(self.settings.get("image_folder", "")),
-                "geometry": str(self.settings.get("geometry", "")),
-                "window_width": str(self.settings.get("window_width", 1200)),
-                "window_height": str(self.settings.get("window_height", 760)),
-                "maximized": str(bool(self.settings.get("maximized", False))),
-                "zoom": str(self.settings.get("zoom", 100)),
-                "slideshow_interval": str(self.settings.get("slideshow_interval", 3)),
-            }
-            SETTINGS_FILE.write_text("; Bildbetrachter Einstellungen\n" + "\n".join(
-                ["[General]"] + [f"{k}={v}" for k, v in cfg["General"].items()]
-            ) + "\n", encoding="utf-8")
+            self._write_settings_file(self.settings)
         except Exception:
             pass
+
     def show_settings(self):
         de = self.lang == "de"
         dialog = tk.Toplevel(self.root)
