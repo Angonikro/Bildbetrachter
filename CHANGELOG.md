@@ -1,3 +1,6 @@
+## 0.1.17
+- Fehler behoben: Der Farbauswahldialog im Zeichenmodus wurde wegen eines fehlenden `colorchooser`-Imports nicht geöffnet.
+
 ## 0.1.16
 - Anleitung und Info-Dialog zeigen jetzt korrekt Version 0.1.16.
 

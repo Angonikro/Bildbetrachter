@@ -6,13 +6,13 @@ import subprocess
 import tkinter as tk
 from pathlib import Path
 from datetime import datetime
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageTk
 
 
 APP_NAME = "Bildbetrachter"
-APP_VERSION = "0.1.16"
+APP_VERSION = "0.1.17"
 SUPPORTED = {".bmp", ".dib", ".gif", ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".tif", ".tiff", ".ico", ".ppm", ".pgm", ".pbm", ".pnm", ".xbm", ".xpm", ".tga", ".pcx"}
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "bildbetrachter"
 SETTINGS_FILE = CONFIG_DIR / "settings.ini"
@@ -217,7 +217,7 @@ class ImageViewerApp:
         frame = tk.Frame(dialog, bg=self.colors["bg"], padx=12, pady=12)
         frame.pack(fill="both", expand=True)
 
-        guide_de = """BILDBETRACHTER v0.1.16 – ANLEITUNG
+        guide_de = """BILDBETRACHTER v0.1.17 – ANLEITUNG
 
 1. Bilder öffnen
 Über Datei → Öffnen wählst du ein Bild aus. Das Bild wird im Hauptfenster angezeigt.
@@ -281,10 +281,10 @@ Danach kann das Programm mit folgendem Befehl gestartet werden:
 python3 Bildbetrachter.py
 
 Info
-Bildbetrachter v0.1.16
+Bildbetrachter v0.1.17
 By Goldisoft 2026
 """
-        guide_en = """IMAGE VIEWER v0.1.16 – USER GUIDE
+        guide_en = """IMAGE VIEWER v0.1.17 – USER GUIDE
 
 1. Opening images
 Use File → Open to select an image. The image is displayed in the main window.
@@ -339,7 +339,7 @@ Then start the application with:
 python3 Bildbetrachter.py
 
 About
-Bildbetrachter v0.1.16
+Bildbetrachter v0.1.17
 By Goldisoft 2026
 """
         text_box = tk.Text(frame, wrap="word", font=("TkDefaultFont", 10),
@@ -369,7 +369,7 @@ By Goldisoft 2026
 
         tk.Label(
             frame,
-            text=f"Bildbetrachter v0.1.16",
+            text=f"Bildbetrachter v0.1.17",
             font=("TkDefaultFont", 16, "bold"),
             bg=self.colors["bg"], fg=self.colors["fg"]
         ).pack(pady=(0, 10))
