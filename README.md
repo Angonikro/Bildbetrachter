@@ -2,6 +2,10 @@
 
 Ein Bildbetrachter mit einfachen Bearbeitungsfunktionen, dunklem/hellem Theme und Diashow.
 
+![Bildbetrachter](Bildbetrachter.png)
+
+[Github Seite](https://github.com/Angonikro/Bildbetrachter/)
+
 ## Funktionen
 
 - Bilder öffnen und speichern
