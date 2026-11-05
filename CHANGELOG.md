@@ -1,5 +1,12 @@
 ## Changelog
 
+## 0.1.19
+- Vollständige Migration der grafischen Benutzeroberfläche von Tkinter auf Qt 6 (PySide6).
+- Neugestaltung der Programmoberfläche mit modernem blauem Design.
+- Überarbeitung der Menüführung, Werkzeugleisten und Dialogfenster.
+- Neue, größere und farbige Symbole in der oberen Werkzeugleiste.
+- Fenstergröße und Fensterposition werden dauerhaft gespeichert.
+
 ## 0.1.18 
 - Kontextmenü wird erst beim Loslassen der rechten Maustaste geöffnet.
 - Verhindert, dass das Loslassen des auslösenden Rechtsklicks direkt den obersten Menüeintrag auswählt.

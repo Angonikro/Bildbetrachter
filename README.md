@@ -1,8 +1,8 @@
-# Bildbetrachter v0.1.18
+# Bildbetrachter v0.1.19
 
 Ein Bildbetrachter mit einfachen Bearbeitungsfunktionen, dunklem/hellem Theme und Diashow.
 
-![Bildbetrachter](Bildbetrachter.png)
+![Bildbetrachter](bildbetrachter1.png)
 
 [Github Seite](https://github.com/Angonikro/Bildbetrachter/)
 
@@ -34,8 +34,10 @@ Die alten Dateien bleiben dabei unverändert. Bilder werden nicht automatisch in
 ## Voraussetzungen
 
 - Python 3
-- Tkinter (`python3-tk`)
+- Qt 6 über PySide6 (`python3-pyside6.qtcore`, `python3-pyside6.qtgui`, `python3-pyside6.qtwidgets`)
 - Pillow (`python3-pil`)
+
+**Tkinter wird nicht mehr verwendet und muss nicht installiert werden.** Die grafische Oberfläche basiert vollständig auf Qt 6 / PySide6.
 
 ## ZIP-Version unter Debian / Raspberry Pi OS starten
 
@@ -43,7 +45,7 @@ Die ZIP-Version muss nicht systemweit installiert werden. Du kannst sie in einem
 
 ### 1. ZIP-Datei entpacken
 
-Entpacke `Bildbetrachter_0.1.18_GITHUB.zip`. Im entpackten Ordner befindet sich der Unterordner `Bild`.
+Entpacke `Bildbetrachter_0.1.19_GITHUB.zip`. Im entpackten Ordner befindet sich der Unterordner `Bild`.
 
 ### 2. Benötigte Pakete installieren
 
@@ -51,7 +53,7 @@ Entpacke `Bildbetrachter_0.1.18_GITHUB.zip`. Im entpackten Ordner befindet sich 
 
 ```bash
 sudo apt update
-sudo apt install python3 python3-tk python3-pil
+sudo apt install python3 python3-pil python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets
 ```
 
 ### 3. Anwendung starten
@@ -82,7 +84,7 @@ Passe auch hier den Pfad an, falls du die ZIP-Datei an einem anderen Ort entpack
 Wenn du statt der ZIP-Version das Debian-Paket verwendest, installiere es im Verzeichnis mit der DEB-Datei so:
 
 ```bash
-sudo apt install ./bildbetrachter_0.1.18_all.deb
+sudo apt install ./bildbetrachter_0.1.19_all.deb
 ```
 
 Danach kannst du den Bildbetrachter über das Anwendungsmenü starten.
@@ -91,10 +93,10 @@ Danach kannst du den Bildbetrachter über das Anwendungsmenü starten.
 
 - `Bildbetrachter.py` – Anwendung
 - `settings.ini` – alte Standard-/Migrationsdatei für bestehende Installationen
-- `requirements.txt` – Python-Abhängigkeiten
+- `requirements.txt` – Python-Abhängigkeiten (PySide6 und Pillow)
 - `install_desktop_launcher.sh` – erstellt eine Desktop-Verknüpfung
 - `CHANGELOG.md` – Versionshistorie
 
-**Bildbetrachter v0.1.18 — Goldisoft 2026**
+**Bildbetrachter v0.1.19 — Goldisoft 2026**
 
 73 de DO2QG Andreas

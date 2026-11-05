@@ -1,2182 +1,525 @@
-import json
-import configparser
-import os
-import platform
-import subprocess
-import sys
-import tkinter as tk
+#!/usr/bin/env python3
+"""Bildbetrachter 0.1.19 - Qt 6 / PySide6 edition."""
+import os, sys, json, configparser, subprocess, platform
 from pathlib import Path
 from datetime import datetime
-from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageDraw
+from PySide6.QtCore import Qt, QSize, QTimer, QSettings, QByteArray, QTranslator, QLocale, QLibraryInfo
+from PySide6.QtGui import QAction, QIcon, QPixmap, QImage, QKeySequence, QPainter, QPen, QColor
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QLabel, QPushButton, QToolButton,
+    QFileDialog, QMessageBox, QVBoxLayout, QHBoxLayout, QSplitter, QListWidget, QListWidgetItem,
+    QScrollArea, QFrame, QMenu, QDialog, QFormLayout, QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox,
+    QCheckBox, QDialogButtonBox, QInputDialog, QColorDialog, QSlider, QStatusBar, QToolBar, QStyle,
+    QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsRectItem, QDockWidget, QTextBrowser,
+    QProgressDialog, QAbstractItemView)
 
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageTk
+APP_NAME='Bildbetrachter'; APP_VERSION='0.1.19'
+SUPPORTED={'.bmp','.dib','.gif','.jpg','.jpeg','.jpe','.jfif','.png','.webp','.tif','.tiff','.ico','.ppm','.pgm','.pbm','.pnm','.xbm','.xpm','.tga','.pcx'}
+CONFIG_DIR=Path(os.environ.get('XDG_CONFIG_HOME',str(Path.home()/'.config')))/'bildbetrachter'
+SETTINGS_FILE=CONFIG_DIR/'settings.ini'
 
-
-APP_NAME = "Bildbetrachter"
-APP_VERSION = "0.1.18"
-SUPPORTED = {".bmp", ".dib", ".gif", ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".tif", ".tiff", ".ico", ".ppm", ".pgm", ".pbm", ".pnm", ".xbm", ".xpm", ".tga", ".pcx"}
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "bildbetrachter"
-SETTINGS_FILE = CONFIG_DIR / "settings.ini"
-LEGACY_SETTINGS_FILE = Path.home() / ".bildbetrachter_settings.json"
-LEGACY_LOCAL_SETTINGS_FILE = Path(__file__).resolve().parent / "settings.ini"
-
-
-class ImageViewerApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title(f"{APP_NAME} {APP_VERSION}")
-        self.root.geometry("1200x760")
-        self.root.minsize(900, 600)
-
-        self.image = None
-        self.original_image = None
-        self.image_path = None
-        self.dirty = False
-        self.photo = None
-        # Position des angezeigten Bildes im Canvas. Wird für exakte
-        # Koordinatenumrechnung beim Zuschneiden benötigt.
-        self.image_display_x = 0
-        self.image_display_y = 0
-        self.zoom_factor = 1.0
-        self.fit_mode = True
-        self.history = []
-        self.redo_history = []
-        self.folder_images = []
-        self.folder_index = -1
-        self.thumbnails = []
-        self.thumb_buttons = []
-        self._thumb_items = {}
-        self._thumb_max_cache = 20
-        self._thumb_refresh_job = None
-        self.status_var = tk.StringVar(value="Kein Bild geöffnet")
-        self.zoom_var = tk.StringVar(value="100 %")
-        self.lang = "de"
-        self.settings = self.load_settings()
-        self.theme = self.settings.get("theme", "dark")
-        # Settings must be loaded before the startup folder is determined.
-        self.current_folder = self.get_start_folder()
-
-        self.build_style()
-        self.build_menu()
-        self.build_ui()
-        self.bind_keys()
-        self.load_language()
-        self.update_ui()
-        self.prepare_start_folder()
-
-        if self.settings.get("geometry"):
-            try:
-                self.root.geometry(self.settings["geometry"])
-            except tk.TclError:
-                pass
-
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-    # ---------- UI ----------
-
-    def build_style(self):
-        self.style = ttk.Style(self.root)
-        try:
-            self.style.theme_use("clam")
-        except tk.TclError:
-            pass
-        self.apply_theme()
-
-    def apply_theme(self):
-        """Apply the selected light/dark theme immediately to the whole UI."""
-        dark = self.theme == "dark"
-        if dark:
-            colors = {
-                "bg": "#202124", "surface": "#2b2d31", "surface2": "#303238",
-                "fg": "#f1f3f4", "muted": "#b8bcc4", "border": "#4a4d53",
-                "active": "#45474d", "canvas": "#18191c", "select": "#5b7cfa",
-            }
+class ImageCanvas(QGraphicsView):
+    def __init__(self, app):
+        super().__init__(); self.app=app; self.setScene(QGraphicsScene(self)); self.setBackgroundBrush(QColor('#10152b'))
+        self.setDragMode(QGraphicsView.NoDrag); self.setCursor(Qt.ArrowCursor); self.setRenderHints(QPainter.Antialiasing|QPainter.SmoothPixmapTransform)
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse); self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
+    def wheelEvent(self,e):
+        # Mausrad direkt zum Zoomen verwenden; Scrollen der Bildansicht
+        # erfolgt weiterhin per gedrueckter mittlerer Maustaste/Scroll-Hand.
+        delta = e.angleDelta().y()
+        if delta:
+            steps = delta / 120.0
+            self.app.zoom(1.15 ** steps)
+            e.accept()
         else:
-            colors = {
-                "bg": "#f2f4f7", "surface": "#ffffff", "surface2": "#e7ebf0",
-                "fg": "#202124", "muted": "#5f6368", "border": "#c8cdd4",
-                "active": "#dce3eb", "canvas": "#e8ebef", "select": "#4b6ee8",
-            }
-        self.colors = colors
-        self.root.configure(bg=colors["bg"])
-        self.root.option_add("*Font", "TkDefaultFont 10")
-        self.root.option_add("*Menu.background", colors["surface"])
-        self.root.option_add("*Menu.foreground", colors["fg"])
-        self.root.option_add("*Menu.activeBackground", colors["active"])
-        self.root.option_add("*Menu.activeForeground", colors["fg"])
-        self.root.option_add("*Menu.borderWidth", 0)
-        self.root.option_add("*TearOff", False)
+            e.ignore()
+    def contextMenuEvent(self,e):
+        if self.app.draw_mode:
+            self.app.draw_mode=False; self.app.status.showMessage('Zeichenmodus beendet',2500); e.accept(); return
+        self.app.show_context_menu(e.globalPos())
+    def mousePressEvent(self,e):
+        if self.app.draw_mode and e.button()==Qt.LeftButton:
+            self.app.draw_begin(self.mapToScene(e.position().toPoint())); e.accept(); return
+        if self.app.crop_mode and e.button()==Qt.LeftButton:
+            self.app.crop_begin(self.mapToScene(e.position().toPoint())); e.accept(); return
+        super().mousePressEvent(e)
+    def mouseMoveEvent(self,e):
+        if self.app.draw_mode and self.app.draw_active:
+            self.app.draw_continue(self.mapToScene(e.position().toPoint())); e.accept(); return
+        if self.app.crop_mode and self.app.crop_active:
+            self.app.crop_update(self.mapToScene(e.position().toPoint())); e.accept(); return
+        super().mouseMoveEvent(e)
+    def mouseReleaseEvent(self,e):
+        if self.app.draw_mode and e.button()==Qt.LeftButton:
+            self.app.draw_end(); e.accept(); return
+        if self.app.crop_mode and e.button()==Qt.LeftButton:
+            self.app.crop_finish(); e.accept(); return
+        super().mouseReleaseEvent(e)
 
-        try:
-            self.style.configure("TFrame", background=colors["bg"])
-            self.style.configure("Toolbar.TFrame", background=colors["surface"], padding=7)
-            self.style.configure("Tool.TButton", background=colors["surface2"], foreground=colors["fg"],
-                                 borderwidth=0, padding=(10, 7), relief="flat")
-            self.style.map("Tool.TButton", background=[("active", colors["active"]), ("pressed", colors["active"])],
-                           foreground=[("disabled", colors["muted"])])
-            self.style.configure("Sidebar.TFrame", background=colors["surface"], padding=7)
-            self.style.configure("Title.TLabel", background=colors["surface"], foreground=colors["fg"],
-                                 font=("TkDefaultFont", 11, "bold"))
-            self.style.configure("ThumbInfo.TLabel", background=colors["surface"], foreground=colors["muted"],
-                                 font=("TkDefaultFont", 9), justify="left")
-            self.style.configure("ThumbName.TLabel", background=colors["surface"], foreground=colors["fg"],
-                                 font=("TkDefaultFont", 9, "bold"), justify="left")
-            self.style.configure("Status.TLabel", background=colors["surface"], foreground=colors["muted"],
-                                 padding=(10, 5))
-            self.style.configure("TLabel", background=colors["bg"], foreground=colors["fg"])
-            self.style.configure("TButton", background=colors["surface2"], foreground=colors["fg"],
-                                 borderwidth=0, padding=(9, 6))
-            self.style.map("TButton", background=[("active", colors["active"]), ("pressed", colors["active"])])
-            self.style.configure("TCombobox", fieldbackground=colors["surface"], background=colors["surface2"],
-                                 foreground=colors["fg"], arrowcolor=colors["fg"])
-            self.style.map("TCombobox", fieldbackground=[("readonly", colors["surface"])],
-                           foreground=[("readonly", colors["fg"])])
-            self.style.configure("TEntry", fieldbackground=colors["surface"], foreground=colors["fg"])
-        except tk.TclError:
-            pass
+class ImageViewer(QMainWindow):
+    def __init__(self):
+        super().__init__(); self.setWindowTitle(f'{APP_NAME} {APP_VERSION}'); self.resize(1400,850); self.setMinimumSize(900,600)
+        self.image=None; self.path=None; self.folder=[]; self.index=-1; self.dirty=False; self.zoom_factor=1.0; self.fit_mode=True
+        self.draw_mode=False; self.draw_active=False; self.crop_mode=False; self.crop_active=False; self.crop_origin=None; self.crop_rect=None; self.draw_color='#ff2020'; self.draw_size=5; self.draw_last=None; self._draw_before=None
+        self.undo_stack=[]; self.redo_stack=[]; self.thumb_cache={}; self.thumb_limit=20; self._thumb_queue=[]; self._thumb_worker=QTimer(self); self._thumb_worker.setInterval(15); self._thumb_worker.timeout.connect(self._thumb_batch); self.slideshow_active=False
+        self.lang='de'; self.theme='blue'; self.settings=self.read_settings(); self.slideshow_interval=max(1,min(60,int(self.settings.get('slideshow_interval','3')))); self._thumb_timer=QTimer(self); self._thumb_timer.setSingleShot(True); self._thumb_timer.timeout.connect(self.refresh_thumbs)
+        self.lang=self.settings.get('language','de'); self.theme=self.settings.get('theme','blue')
+        if self.theme == 'violet': self.theme = 'blue'
+        self.build_ui(); self.build_menus(); self.apply_theme(); self.update_actions()
+        geometry=self.settings.get('window_geometry','')
+        if geometry:
+            try:self.restoreGeometry(QByteArray.fromHex(geometry.encode('ascii')))
+            except Exception:pass
+        QTimer.singleShot(100,self.load_start_folder)
+        if len(sys.argv)>1 and Path(sys.argv[1]).is_file(): QTimer.singleShot(150,lambda:self.open_path(sys.argv[1]))
 
-        for name in ("main", "content", "viewer_frame"):
-            widget = getattr(self, name, None)
-            if widget is not None:
-                try:
-                    widget.configure(style="TFrame")
-                except tk.TclError:
-                    pass
-        if hasattr(self, "toolbar"):
-            self.toolbar.configure(style="Toolbar.TFrame")
-            # Icons neu erzeugen, damit sie im hellen Theme dunkel und
-            # im dunklen Theme hell dargestellt werden.
-            try:
-                self._make_toolbar_icons()
-                icon_map = {
-                    "btn_open": "open", "btn_save": "save", "btn_undo": "undo",
-                    "btn_redo": "redo", "btn_left": "left", "btn_right": "right",
-                    "btn_mirror_h": "mirror_h", "btn_mirror_v": "mirror_v",
-                    "btn_fit": "fit", "btn_100": "zoom_in", "btn_full": "fullscreen",
-                    "btn_open_image_folder": "folder",
-                }
-                for button_name, icon_name in icon_map.items():
-                    button = getattr(self, button_name, None)
-                    if button is not None:
-                        button.configure(image=self.toolbar_icons[icon_name])
-            except Exception:
-                pass
-        if hasattr(self, "sidebar"):
-            self.sidebar.configure(style="Sidebar.TFrame")
-        if hasattr(self, "sidebar_title"):
-            self.sidebar_title.configure(style="Title.TLabel")
-        if hasattr(self, "status"):
-            self.status.configure(style="Status.TLabel")
-        if hasattr(self, "canvas"):
-            self.canvas.configure(background=colors["canvas"])
-        if hasattr(self, "thumb_canvas"):
-            self.thumb_canvas.configure(background=colors["surface"])
-
-    def setup_modern_style(self):
-        """Modern, compact dark UI styling without changing editor behavior."""
-        self.root.configure(bg="#202124")
-        self.root.option_add("*Font", "TkDefaultFont 10")
-        self.root.option_add("*Menu.background", "#2b2d31")
-        self.root.option_add("*Menu.foreground", "#f1f3f4")
-        self.root.option_add("*Menu.activeBackground", "#45474d")
-        self.root.option_add("*Menu.activeForeground", "#ffffff")
-        self.root.option_add("*TearOff", False)
-
-        # ttk styling, when ttk widgets are present
-        try:
-            style = ttk.Style(self.root)
-            style.theme_use("clam")
-            style.configure(
-                "Modern.TButton",
-                background="#303238",
-                foreground="#f1f3f4",
-                borderwidth=0,
-                padding=(10, 7),
-                relief="flat",
-            )
-            style.map(
-                "Modern.TButton",
-                background=[("active", "#45474d"), ("pressed", "#55585f")],
-                foreground=[("disabled", "#777a80")],
-            )
-            style.configure(
-                "Modern.TFrame",
-                background="#202124",
-            )
-            style.configure(
-                "Modern.TLabel",
-                background="#202124",
-                foreground="#dfe1e5",
-            )
-        except Exception:
-            pass
-
-    def show_manual(self):
-        de = self.lang == "de"
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Anleitung" if de else "User Guide")
-        dialog.transient(self.root)
-        dialog.geometry("760x620")
-
-        frame = tk.Frame(dialog, bg=self.colors["bg"], padx=12, pady=12)
-        frame.pack(fill="both", expand=True)
-
-        guide_de = """BILDBETRACHTER v0.1.18 – ANLEITUNG
-
-1. Bilder öffnen
-Über Datei → Öffnen wählst du ein Bild aus. Das Bild wird im Hauptfenster angezeigt.
-
-2. Bilder speichern
-Über Datei → Speichern bzw. Speichern unter kannst du das bearbeitete Bild sichern.
-Beim Speichern unter wird das gewünschte Bildformat verwendet.
-
-3. Größe ändern
-Über Bild → Größe ändern kannst du Breite und Höhe exakt in Pixeln eingeben, zum Beispiel:
-800 × 600
-Die eingegebenen Werte werden direkt übernommen.
-
-4. Bildbearbeitung
-Die vorhandenen Bearbeitungsfunktionen stehen im Menü Bearbeiten bzw. Bild zur Verfügung.
-Änderungen können – soweit von der jeweiligen Funktion unterstützt – rückgängig gemacht
-und wiederholt werden.
-
-5. Ansicht und Zoom
-Die Ansicht kann über das Menü Ansicht angepasst werden. Der Zoom erleichtert das
-Betrachten kleiner oder großer Bilder.
-
-6. Diashow
-Wenn die Diashow-Funktion vorhanden ist, kann sie über die entsprechenden Bedienelemente
-gestartet und beendet werden. Das Intervall wird in den Einstellungen gespeichert.
-
-7. Sprache
-Unter den Spracheinstellungen kann zwischen Deutsch und English gewechselt werden.
-Die Auswahl wird dauerhaft in settings.ini gespeichert.
-
-8. Einstellungen
-Alle dauerhaft gespeicherten Programmeinstellungen liegen in:
-Bild/settings.ini
-Dort werden unter anderem Sprache, Fenstergröße, Fensterstatus, Zoom, Diashow-Intervall
-und der zuletzt verwendete Ordner sowie der festgelegte Bildordner gespeichert.
-
-9. Bildordner
-Unter Werkzeuge → Einstellungen kann ein fester Bildordner eingetragen oder über Durchsuchen ausgewählt werden.
-Beim Start wird zuerst dieser Ordner verwendet. Ist er nicht vorhanden, wird der zuletzt verwendete Ordner genutzt;
-ist auch dieser nicht vorhanden, wird der Programmordner Bild verwendet.
-
-10. Theme / Darstellung
-Unter Werkzeuge → Einstellungen kann zwischen Hell und Dunkel gewählt werden. Das Theme
-wird sofort übernommen und dauerhaft in den Einstellungen gespeichert.
-
-11. Desktop-Verknüpfung
-Unter Linux kann install_desktop_launcher.sh verwendet werden, um eine Desktop-
-Verknüpfung für den Bildbetrachter anzulegen.
-
-12. Miniaturbilder und Bildinformationen
-Neben den Miniaturbildern werden Dateiname, Bildabmessungen und Dateigröße angezeigt.
-Ein Klick auf ein Vorschaubild öffnet es ausschließlich in der großen Hauptanzeige.
-Das Fenster „Bildinformationen...“ erscheint nur nach ausdrücklichem Aufruf über Datei.
-Es kann über die Schließen-Schaltfläche oder Esc geschlossen werden.
-
-13. Installation
-Benötigte Python-Abhängigkeiten werden über requirements.txt installiert:
-python3 -m pip install -r requirements.txt
-
-Danach kann das Programm mit folgendem Befehl gestartet werden:
-python3 Bildbetrachter.py
-
-Info
-Bildbetrachter v0.1.17
-By Goldisoft 2026
-"""
-        guide_en = """IMAGE VIEWER v0.1.17 – USER GUIDE
-
-1. Opening images
-Use File → Open to select an image. The image is displayed in the main window.
-
-2. Saving images
-Use File → Save or Save As to save the edited image. Save As lets you choose the
-desired image format.
-
-3. Resize
-Use Image → Resize to enter an exact width and height in pixels, for example:
-800 × 600
-The entered values are applied directly.
-
-4. Image editing
-The available editing functions are provided in the Edit and Image menus.
-Changes can be undone and redone where supported by the respective function.
-
-5. View and zoom
-Use the View menu to adjust the display. Zoom makes it easier to inspect small or large images.
-
-6. Slideshow
-If the slideshow function is available, it can be started and stopped using the corresponding
-controls. The interval is stored in the settings.
-
-7. Language
-The language can be changed between German and English. The selection is stored permanently
-in settings.ini.
-
-8. Settings
-All persistent application settings are stored in:
-Bild/settings.ini
-This includes language, window size, window state, zoom, slideshow interval and the last folder.
-
-9. Theme / Appearance
-Under Tools → Settings you can choose between Light and Dark. The theme is applied immediately
-and stored permanently in the settings.
-
-10. Desktop shortcut
-On Linux, install_desktop_launcher.sh can be used to create a desktop shortcut.
-
-11. Thumbnails and image information
-The thumbnail list shows the filename, image dimensions and file size beside each preview.
-Clicking a thumbnail opens the image only in the large main view.
-The Image Information window appears only when explicitly requested from the File menu.
-It can be closed with its close button or Esc.
-
-12. Installation
-Install the required Python dependencies with:
-python3 -m pip install -r requirements.txt
-
-Then start the application with:
-python3 Bildbetrachter.py
-
-About
-Bildbetrachter v0.1.17
-By Goldisoft 2026
-"""
-        text_box = tk.Text(frame, wrap="word", font=("TkDefaultFont", 10),
-                           bg=self.colors["surface"], fg=self.colors["fg"],
-                           insertbackground=self.colors["fg"], selectbackground=self.colors["select"],
-                           relief="flat", padx=10, pady=10)
-        text_box.pack(side="left", fill="both", expand=True)
-        scroll = tk.Scrollbar(frame, command=text_box.yview,
-                              bg=self.colors["surface2"], troughcolor=self.colors["bg"],
-                              activebackground=self.colors["active"], relief="flat", bd=0)
-        scroll.pack(side="right", fill="y")
-        text_box.configure(yscrollcommand=scroll.set)
-        text_box.insert("1.0", guide_de if de else guide_en)
-        text_box.configure(state="disabled")
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-
-    def show_about_dialog(self):
-        de = self.lang == "de"
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Info" if de else "About")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-
-        frame = tk.Frame(dialog, bg=self.colors["bg"], padx=28, pady=24)
-        frame.pack(fill="both", expand=True)
-
-        tk.Label(
-            frame,
-            text=f"Bildbetrachter v{APP_VERSION}",
-            font=("TkDefaultFont", 16, "bold"),
-            bg=self.colors["bg"], fg=self.colors["fg"]
-        ).pack(pady=(0, 10))
-
-        tk.Label(
-            frame,
-            text="By Goldisoft 2026",
-            font=("TkDefaultFont", 11),
-            bg=self.colors["bg"], fg=self.colors["muted"]
-        ).pack(pady=(0, 18))
-
-        tk.Button(
-            frame,
-            text="OK",
-            width=10,
-            command=dialog.destroy
-        ).pack()
-
-        dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-
-    def build_menu(self):
-        self.menubar = tk.Menu(self.root)
-
-        self.file_menu = tk.Menu(self.menubar, tearoff=False)
-        self.edit_menu = tk.Menu(self.menubar, tearoff=False)
-        self.image_menu = tk.Menu(self.menubar, tearoff=False)
-        self.view_menu = tk.Menu(self.menubar, tearoff=False)
-        self.help_menu = tk.Menu(self.menubar, tearoff=False)
-
-        self.menubar.add_cascade(label="Datei" if self.lang == "de" else "File",
-                                 menu=self.file_menu)
-        self.menubar.add_cascade(label="Bearbeiten" if self.lang == "de" else "Edit",
-                                 menu=self.edit_menu)
-        self.menubar.add_cascade(label="Bild" if self.lang == "de" else "Image",
-                                 menu=self.image_menu)
-        self.menubar.add_cascade(label="Ansicht" if self.lang == "de" else "View",
-                                 menu=self.view_menu)
-        self.menubar.add_cascade(label="Hilfe" if self.lang == "de" else "Help",
-                                 menu=self.help_menu)
-
-        self.help_menu.add_command(
-            label="Anleitung" if self.lang == "de" else "User Guide",
-            command=self.show_manual
-        )
-        self.help_menu.add_separator()
-        self.help_menu.add_command(
-            label="Info" if self.lang == "de" else "About",
-            command=self.show_about_dialog
-        )
-        self.root.config(menu=self.menubar)
-
-
-    def rebuild_menu(self):
-        de = self.lang == "de"
-
-        self.file_menu = tk.Menu(self.menubar, tearoff=0)
-        self.edit_menu = tk.Menu(self.menubar, tearoff=0)
-        self.view_menu = tk.Menu(self.menubar, tearoff=0)
-        self.image_menu = tk.Menu(self.menubar, tearoff=0)
-        self.tools_menu = tk.Menu(self.menubar, tearoff=0)
-        self.help_menu = tk.Menu(self.menubar, tearoff=0)
-        self.theme_menu = tk.Menu(self.menubar, tearoff=0)
-
-        self.file_menu.add_command(
-            label="Öffnen..." if de else "Open...", command=self.open_image, accelerator="Ctrl+O")
-        self.file_menu.add_command(
-            label="Speichern unter..." if de else "Save As...", command=self.save_image_as, accelerator="Ctrl+Shift+S")
-        self.file_menu.add_command(
-            label="Speichern" if de else "Save", command=self.save_image, accelerator="Ctrl+S")
-        self.file_menu.add_command(
-            label="Bildinformationen..." if de else "Image Information...",
-            command=self.show_image_information)
-        self.file_menu.add_separator()
-        self.file_menu.add_command(
-            label="Drucken" if de else "Print", command=self.print_image, accelerator="Ctrl+P")
-        self.file_menu.add_command(
-            label="Als Hintergrundbild setzen" if de else "Set as wallpaper",
-            command=self.set_wallpaper)
-        self.file_menu.add_separator()
-        self.file_menu.add_command(
-            label="Beenden" if de else "Exit", command=self.on_close, accelerator="Alt+F4")
-
-        self.edit_menu.add_command(
-            label="Rückgängig" if de else "Undo", command=self.undo, accelerator="Ctrl+Z")
-        self.edit_menu.add_command(
-            label="Wiederholen" if de else "Redo", command=self.redo, accelerator="Ctrl+Y")
-        self.edit_menu.add_separator()
-        self.edit_menu.add_command(
-            label="Zuschneiden" if de else "Crop", command=self.start_crop_mode, accelerator="Ctrl+Shift+X")
-        self.edit_menu.add_command(
-            label="Zeichnen..." if de else "Draw...", command=self.start_draw_mode, accelerator="Ctrl+D")
-        self.edit_menu.add_command(
-            label="Größe ändern" if de else "Resize", command=self.resize_image_dialog, accelerator="Ctrl+E")
-
-        self.view_menu.add_command(
-            label="An Fenster anpassen" if de else "Fit to window", command=self.fit_to_window, accelerator="Ctrl+F")
-        self.view_menu.add_command(
-            label="100 %", command=self.zoom_100, accelerator="Ctrl+0")
-        self.view_menu.add_command(
-            label="Vergrößern" if de else "Zoom in", command=self.zoom_in, accelerator="+")
-        self.view_menu.add_command(
-            label="Verkleinern" if de else "Zoom out", command=self.zoom_out, accelerator="-")
-        self.view_menu.add_command(
-            label="Vollbild" if de else "Fullscreen", command=self.toggle_fullscreen, accelerator="F11")
-        self.view_menu.add_separator()
-        self.view_menu.add_command(
-            label="Diashow starten" if de else "Start slideshow",
-            command=self.start_slideshow, accelerator="F5")
-
-        self.image_menu.add_command(
-            label="90° links drehen" if de else "Rotate 90° left",
-            command=lambda: self.rotate(-90), accelerator="Ctrl+L")
-        self.image_menu.add_command(
-            label="90° rechts drehen" if de else "Rotate 90° right",
-            command=lambda: self.rotate(90), accelerator="Ctrl+R")
-        self.image_menu.add_command(
-            label="Horizontal spiegeln" if de else "Flip horizontal",
-            command=self.mirror_horizontal, accelerator="Ctrl+H")
-        self.image_menu.add_command(
-            label="Vertikal spiegeln" if de else "Flip vertical",
-            command=self.mirror_vertical, accelerator="Ctrl+Shift+H")
-        self.image_menu.add_separator()
-        self.image_menu.add_command(
-            label="Graustufen" if de else "Grayscale", command=self.grayscale, accelerator="Ctrl+G")
-        self.image_menu.add_command(
-            label="Negativ" if de else "Invert", command=self.invert, accelerator="Ctrl+I")
-        self.image_menu.add_command(
-            label="Schwarzweiß" if de else "Black & white", command=self.black_white, accelerator="Ctrl+B")
-        self.image_menu.add_command(
-            label="Schärfen" if de else "Sharpen", command=self.sharpen, accelerator="Ctrl+K")
-        self.image_menu.add_command(
-            label="Weichzeichnen" if de else "Blur", command=self.blur, accelerator="Ctrl+Shift+B")
-
-        self.tools_menu.add_command(
-            label="Helligkeit..." if de else "Brightness...",
-            command=self.adjust_brightness, accelerator="Ctrl+1")
-        self.tools_menu.add_command(
-            label="Kontrast..." if de else "Contrast...",
-            command=self.adjust_contrast, accelerator="Ctrl+2")
-        self.tools_menu.add_command(
-            label="Sättigung..." if de else "Saturation...",
-            command=self.adjust_saturation, accelerator="Ctrl+3")
-        self.tools_menu.add_separator()
-        self.tools_menu.add_command(
-            label="Sprache: Deutsch" if de else "Language: German",
-            command=lambda: self.set_language("de"))
-        self.tools_menu.add_command(
-            label="Sprache: English" if de else "Language: English",
-            command=lambda: self.set_language("en"))
-        self.tools_menu.add_command(
-            label="Einstellungen" if de else "Settings",
-            command=self.show_settings)
-
-        self.theme_menu.add_command(
-            label="Dunkel" if de else "Dark",
-            command=lambda: self.set_theme("dark"))
-        self.theme_menu.add_command(
-            label="Hell" if de else "Light",
-            command=lambda: self.set_theme("light"))
-
-        self.help_menu.add_command(
-            label="Anleitung" if de else "User Guide",
-            command=self.show_manual)
-        self.help_menu.add_separator()
-        self.help_menu.add_command(
-            label="Info" if de else "About",
-            command=self.show_about_dialog)
-
-        self.menubar.delete(0, "end")
-        self.menubar.add_cascade(label="Datei" if de else "File", menu=self.file_menu)
-        self.menubar.add_cascade(label="Bearbeiten" if de else "Edit", menu=self.edit_menu)
-        self.menubar.add_cascade(label="Ansicht" if de else "View", menu=self.view_menu)
-        self.menubar.add_cascade(label="Bild" if de else "Image", menu=self.image_menu)
-        self.menubar.add_cascade(label="Werkzeuge" if de else "Tools", menu=self.tools_menu)
-        self.menubar.add_cascade(label="Theme", menu=self.theme_menu)
-        self.menubar.add_cascade(label="Hilfe" if de else "Help", menu=self.help_menu)
-
-    def _make_toolbar_icons(self):
-        """Create compact toolbar icons that work on Linux and Windows without external assets."""
-        from PIL import ImageDraw
-
-        size = 34
-        # Helle Symbole sind im hellen Theme auf dem hellen Toolbar-Hintergrund
-        # kaum sichtbar. Im hellen Theme verwenden wir deshalb dunkle Symbole.
-        fg = (235, 238, 242, 255) if self.theme == "dark" else (55, 59, 66, 255)
-        blue = (70, 150, 235, 255)
-        yellow = (245, 193, 62, 255)
-        green = (83, 185, 110, 255)
-
-        def icon(kind):
-            im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-            d = ImageDraw.Draw(im)
-            if kind == "open":
-                d.rounded_rectangle((4, 9, 30, 28), radius=3, fill=yellow, outline=fg, width=1)
-                d.polygon([(5, 9), (12, 9), (15, 13), (30, 13), (30, 28), (4, 28)], fill=yellow, outline=fg)
-            elif kind == "save":
-                d.rounded_rectangle((6, 4, 28, 30), radius=2, fill=blue, outline=fg, width=1)
-                d.rectangle((10, 5, 24, 12), fill=(225, 232, 240, 255))
-                d.rectangle((10, 18, 24, 28), fill=green, outline=fg)
-                d.rectangle((13, 7, 21, 11), fill=(60, 70, 80, 255))
-            elif kind == "undo":
-                d.arc((7, 7, 29, 29), 45, 285, fill=fg, width=3)
-                d.polygon([(7, 14), (7, 6), (15, 10)], fill=fg)
-            elif kind == "redo":
-                d.arc((5, 7, 27, 29), 255, 135, fill=fg, width=3)
-                d.polygon([(27, 14), (27, 6), (19, 10)], fill=fg)
-            elif kind in ("left", "right"):
-                if kind == "left":
-                    d.arc((5, 6, 29, 30), 65, 285, fill=fg, width=3)
-                    d.polygon([(7, 16), (13, 10), (14, 18)], fill=fg)
-                else:
-                    d.arc((5, 6, 29, 30), 255, 115, fill=fg, width=3)
-                    d.polygon([(27, 16), (21, 10), (20, 18)], fill=fg)
-            elif kind == "mirror_h":
-                d.line((5, 17, 29, 17), fill=fg, width=2)
-                d.polygon([(5,17),(11,11),(11,23)], fill=fg)
-                d.polygon([(29,17),(23,11),(23,23)], fill=fg)
-            elif kind == "mirror_v":
-                d.line((17, 5, 17, 29), fill=fg, width=2)
-                d.polygon([(17,5),(11,11),(23,11)], fill=fg)
-                d.polygon([(17,29),(11,23),(23,23)], fill=fg)
-            elif kind == "fit":
-                d.line((6, 12, 6, 6, 12, 6), fill=fg, width=2)
-                d.line((22, 6, 28, 6, 28, 12), fill=fg, width=2)
-                d.line((6, 22, 6, 28, 12, 28), fill=fg, width=2)
-                d.line((22, 28, 28, 28, 28, 22), fill=fg, width=2)
-                d.line((12, 17, 22, 17), fill=fg, width=2)
-                d.line((17, 12, 17, 22), fill=fg, width=2)
-            elif kind == "zoom_out":
-                d.ellipse((5, 5, 24, 24), outline=fg, width=3)
-                d.line((20, 20, 29, 29), fill=fg, width=3)
-                d.line((10, 15, 19, 15), fill=fg, width=2)
-            elif kind == "zoom_in":
-                d.ellipse((5, 5, 24, 24), outline=fg, width=3)
-                d.line((20, 20, 29, 29), fill=fg, width=3)
-                d.line((10, 15, 19, 15), fill=fg, width=2)
-                d.line((14, 10, 14, 20), fill=fg, width=2)
-            elif kind == "fullscreen":
-                d.line((5,12,5,5,12,5), fill=fg, width=2)
-                d.line((22,5,29,5,29,12), fill=fg, width=2)
-                d.line((5,22,5,29,12,29), fill=fg, width=2)
-                d.line((22,29,29,29,29,22), fill=fg, width=2)
-            return ImageTk.PhotoImage(im)
-
-        kinds = ["open", "save", "undo", "redo", "left", "right", "mirror_h", "mirror_v", "fit", "zoom_out", "zoom_in", "fullscreen"]
-        self.toolbar_icons = {k: icon(k) for k in kinds}
-        self.toolbar_icons["folder"] = self.toolbar_icons["open"]
-        return self.toolbar_icons
+    def read_settings(self):
+        CONFIG_DIR.mkdir(parents=True,exist_ok=True); cp=configparser.ConfigParser()
+        if SETTINGS_FILE.exists(): cp.read(SETTINGS_FILE,encoding='utf-8')
+        return dict(cp['general']) if cp.has_section('general') else {}
+    def save_settings(self):
+        CONFIG_DIR.mkdir(parents=True,exist_ok=True); cp=configparser.ConfigParser(); cp['general']={'theme':self.theme,'language':self.lang,'slideshow_interval':str(getattr(self,'slideshow_interval',3)),'window_geometry':bytes(self.saveGeometry().toHex()).decode('ascii'),'last_folder':str(Path(self.path).parent) if self.path else self.settings.get('last_folder',str(Path.home()/'Pictures'))}
+        with SETTINGS_FILE.open('w',encoding='utf-8') as f: cp.write(f)
 
     def build_ui(self):
-        self.main = ttk.Frame(self.root)
-        self.main.pack(fill="both", expand=True)
+        central=QWidget(); root=QVBoxLayout(central); root.setContentsMargins(7,7,7,5); root.setSpacing(7)
+        self.toolbar=QFrame(); self.toolbar.setObjectName('toolbar'); tl=QHBoxLayout(self.toolbar); tl.setContentsMargins(7,6,7,6); tl.setSpacing(6)
+        specs=[('open.svg','Öffnen','Open',self.open_dialog),('save.svg','Speichern','Save',self.save_image),('undo.svg','Rückgängig','Undo',self.undo),('redo.svg','Wiederholen','Redo',self.redo),('rotate-left.svg','Links drehen','Rotate left',lambda:self.rotate(90)),('rotate-right.svg','Rechts drehen','Rotate right',lambda:self.rotate(-90)),('flip-h.svg','Horizontal','Flip H',self.mirror_h),('flip-v.svg','Vertikal','Flip V',self.mirror_v),('fit.svg','Anpassen','Fit',self.fit),('zoom.svg','100 %','100 %',self.zoom100),('fullscreen.svg','Vollbild','Fullscreen',self.toggle_fullscreen)]
+        self.toolbar_buttons=[]
+        for icon_name,label,en_label,fn in specs:
+            b=QToolButton(); b.setIcon(QIcon(str(Path(__file__).parent/'icons'/'toolbar'/icon_name))); b.setIconSize(QSize(48,48)); b.setText(self.tr(label,en_label)); b.setProperty('de_text',label); b.setProperty('en_text',en_label); self.toolbar_buttons.append(b); b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon); b.setMinimumSize(104,96); b.setStyleSheet('QToolButton { font-size: 12pt; font-weight: 600; padding: 5px; } QToolButton::icon { width: 48px; height: 48px; }'); b.clicked.connect(fn); tl.addWidget(b)
+            if label=='Speichern': self.save_button=b
+        tl.addStretch(1); root.addWidget(self.toolbar)
+        split=QSplitter(Qt.Horizontal); split.setChildrenCollapsible(False)
+        side=QFrame(); side.setObjectName('sidebar'); side.setMinimumWidth(250); side.setMaximumWidth(420); sl=QVBoxLayout(side); sl.setContentsMargins(9,9,9,9)
+        title=QLabel(self.tr('▣  Bilder im Ordner','▣  Images in folder')); title.setObjectName('sideTitle'); self.side_title=title; sl.addWidget(title)
+        self.folder_label=QLabel(self.tr('Aktueller Ordner: —','Current folder: —'));  self.folder_label.setWordWrap(True); sl.addWidget(self.folder_label)
+        self.folder_btn=QPushButton(self.tr('📁  Gespeicherten Bildordner laden','📁  Load saved image folder'));  self.folder_btn.clicked.connect(self.choose_folder); sl.addWidget(self.folder_btn)
+        self.list=QListWidget(); self.list.setIconSize(QSize(100,72)); self.list.setSpacing(5); self.list.setUniformItemSizes(False); self.list.currentRowChanged.connect(self.select_row); self.list.verticalScrollBar().valueChanged.connect(lambda _v:self._thumb_timer.start(80)); self.list.setContextMenuPolicy(Qt.CustomContextMenu); self.list.customContextMenuRequested.connect(self.thumb_context); sl.addWidget(self.list,1)
+        split.addWidget(side)
+        self.canvas=ImageCanvas(self); split.addWidget(self.canvas); split.setStretchFactor(1,1); split.setSizes([300,1050]); root.addWidget(split,1)
+        self.setCentralWidget(central); self.status=QStatusBar(); self.setStatusBar(self.status); self.status.showMessage('Kein Bild geöffnet')
+        self.info=QDockWidget(self.tr('Bildinformationen','Image information'),self); self.info.setObjectName('infoDock'); self.info.setAllowedAreas(Qt.RightDockWidgetArea|Qt.LeftDockWidgetArea)
+        self.info_text=QLabel('Kein Bild geöffnet'); self.info_text.setWordWrap(True); self.info.setWidget(self.info_text); self.addDockWidget(Qt.RightDockWidgetArea,self.info); self.info.hide()
 
-        self.toolbar = ttk.Frame(self.main, style="Toolbar.TFrame")
-        self.toolbar.pack(fill="x")
-        self._make_toolbar_icons()
-
-        self.btn_open = ttk.Button(self.toolbar, style="Tool.TButton", command=self.open_image, image=self.toolbar_icons["open"], compound="top")
-        self.btn_save = ttk.Button(self.toolbar, style="Tool.TButton", command=self.save_image, image=self.toolbar_icons["save"], compound="top")
-        self.btn_undo = ttk.Button(self.toolbar, style="Tool.TButton", command=self.undo, image=self.toolbar_icons["undo"], compound="top")
-        self.btn_redo = ttk.Button(self.toolbar, style="Tool.TButton", command=self.redo, image=self.toolbar_icons["redo"], compound="top")
-        self.btn_left = ttk.Button(self.toolbar, style="Tool.TButton", command=lambda: self.rotate(-90), image=self.toolbar_icons["left"], compound="top")
-        self.btn_right = ttk.Button(self.toolbar, style="Tool.TButton", command=lambda: self.rotate(90), image=self.toolbar_icons["right"], compound="top")
-        self.btn_mirror_h = ttk.Button(self.toolbar, style="Tool.TButton", command=self.mirror_horizontal, image=self.toolbar_icons["mirror_h"], compound="top")
-        self.btn_mirror_v = ttk.Button(self.toolbar, style="Tool.TButton", command=self.mirror_vertical, image=self.toolbar_icons["mirror_v"], compound="top")
-        self.btn_fit = ttk.Button(self.toolbar, style="Tool.TButton", command=self.fit_to_window, image=self.toolbar_icons["fit"], compound="top")
-        self.btn_100 = ttk.Button(self.toolbar, style="Tool.TButton", command=self.zoom_100, text="100 %", image=self.toolbar_icons["zoom_in"], compound="top")
-        self.btn_full = ttk.Button(self.toolbar, style="Tool.TButton", command=self.toggle_fullscreen, image=self.toolbar_icons["fullscreen"], compound="top")
-
-        for b in (
-            self.btn_open, self.btn_save, self.btn_undo, self.btn_redo,
-            self.btn_left, self.btn_right, self.btn_mirror_h, self.btn_mirror_v,
-            self.btn_fit, self.btn_100, self.btn_full
-        ):
-            b.pack(side="left", padx=2, ipadx=8, ipady=3)
-
-        self.content = ttk.Frame(self.main)
-        self.content.pack(fill="both", expand=True)
-
-        self.sidebar = ttk.Frame(self.content, width=320, style="Sidebar.TFrame")
-        self.sidebar.pack(side="left", fill="y")
-        self.sidebar.pack_propagate(False)
-
-        self.sidebar_title = ttk.Label(self.sidebar, style="Title.TLabel")
-        self.sidebar_title.pack(fill="x", pady=(0, 2))
-
-        self.current_folder_var = tk.StringVar(value="")
-        self.current_folder_label = ttk.Label(
-            self.sidebar, textvariable=self.current_folder_var,
-            style="Status.TLabel", justify="left", anchor="w",
-            wraplength=295
-        )
-        self.current_folder_label.pack(fill="x", pady=(0, 5))
-
-        self.btn_open_image_folder = ttk.Button(
-            self.sidebar, style="Tool.TButton",
-            command=self.load_configured_image_folder,
-            image=self.toolbar_icons["folder"], compound="left"
-        )
-        self.btn_open_image_folder.pack(fill="x", padx=6, pady=(0, 8))
-
-        self.thumb_canvas = tk.Canvas(self.sidebar, highlightthickness=0)
-        self.thumb_scroll = ttk.Scrollbar(self.sidebar, orient="vertical", command=self.thumb_canvas.yview)
-        self.thumb_canvas.configure(yscrollcommand=self.thumb_scroll.set)
-        self.thumb_canvas.pack(side="left", fill="both", expand=True)
-        self.thumb_scroll.pack(side="right", fill="y")
-
-        # Virtuelle Vorschauleiste: Es existieren nur sichtbare Karten plus Puffer.
-        self._thumb_row_height = 112
-        self.thumb_canvas.bind("<Configure>", lambda _e: self._schedule_thumb_refresh())
-        self.thumb_canvas.bind("<MouseWheel>", self._on_thumb_scroll)
-        self.thumb_canvas.bind("<Button-4>", self._on_thumb_scroll)
-        self.thumb_canvas.bind("<Button-5>", self._on_thumb_scroll)
-        self.thumb_canvas.bind("<ButtonRelease-1>", lambda _e: self._schedule_thumb_refresh())
-
-        # Scrollen aktualisiert nur das kleine sichtbare Vorschaufenster.
-        self._scroll_thumbnails = self._on_thumb_scroll
-
-        # Informationsbereich: standardmäßig verborgen. Er wird nur über
-        # Datei → Bildinformationen eingeblendet und bleibt anschließend
-        # sichtbar, auch wenn ein anderes Vorschaubild angeklickt wird.
-        self.info_panel = ttk.Frame(self.content, width=315, style="Sidebar.TFrame")
-        self.info_panel.pack_propagate(False)
-        self.info_panel_visible = False
-
-        self.info_header = ttk.Frame(self.info_panel, style="Sidebar.TFrame")
-        self.info_header.pack(fill="x", pady=(2, 8))
-        self.info_title = ttk.Label(
-            self.info_header, text="Bildinformationen", style="Title.TLabel"
-        )
-        self.info_title.pack(side="left", fill="x", expand=True)
-        self.info_close_button = ttk.Button(
-            self.info_header, text="✕", width=3, command=self.hide_image_information
-        )
-        self.info_close_button.pack(side="right")
-
-        self.info_body = tk.Text(
-            self.info_panel, wrap="word", state="disabled",
-            bg=self.colors["surface"], fg=self.colors["fg"],
-            insertbackground=self.colors["fg"], relief="flat",
-            padx=12, pady=10, font=("TkDefaultFont", 10)
-        )
-        self.info_body.pack(fill="both", expand=True)
-
-        self.viewer_frame = ttk.Frame(self.content)
-        self.viewer_frame.pack(side="left", fill="both", expand=True)
-
-        self.canvas = tk.Canvas(self.viewer_frame, background="#252525", highlightthickness=0)
-        self.hbar = ttk.Scrollbar(self.viewer_frame, orient="horizontal", command=self.canvas.xview)
-        self.vbar = ttk.Scrollbar(self.viewer_frame, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(xscrollcommand=self.hbar.set, yscrollcommand=self.vbar.set)
-
-        self.canvas.grid(row=0, column=0, sticky="nsew")
-        self.vbar.grid(row=0, column=1, sticky="ns")
-        self.hbar.grid(row=1, column=0, sticky="ew")
-        self.viewer_frame.rowconfigure(0, weight=1)
-        self.viewer_frame.columnconfigure(0, weight=1)
-
-        self.status = ttk.Label(self.main, textvariable=self.status_var, style="Status.TLabel", anchor="w")
-        self.status.pack(fill="x")
-
-        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
-        self.canvas.bind("<Button-4>", self.on_mouse_wheel)
-        self.canvas.bind("<Button-5>", self.on_mouse_wheel)
-        self.canvas.bind("<ButtonPress-1>", self.pan_start)
-        self.canvas.bind("<B1-Motion>", self.pan_move)
-        # Erst beim Loslassen öffnen: So kann das Loslassen desselben
-        # Rechtsklicks keinen Menüeintrag versehentlich aktivieren (X11/Tk).
-        self.canvas.bind("<ButtonRelease-3>", self.show_context_menu)
-
-        self.crop_start = None
-        self.crop_rect = None
-        self.draw_mode = False
-        self.draw_color = "#ff0000"
-        self.draw_size = 5
-        self.draw_last_point = None
-        self.draw_stroke_active = False
-
-    def bind_keys(self):
-        # Tastenkürzel der Menüpunkte. Die gleichen Kürzel werden zusätzlich
-        # über ``accelerator`` im Menü sichtbar angezeigt.
-        bindings = {
-            "<Control-o>": self.open_image,
-            "<Control-Shift-s>": self.save_image_as,
-            "<Control-s>": self.save_image,
-            "<Control-p>": self.print_image,
-            "<Control-z>": self.undo,
-            "<Control-y>": self.redo,
-            "<Control-Shift-z>": self.redo,
-            "<Control-Shift-x>": self.start_crop_mode,
-            "<Control-d>": self.start_draw_mode,
-            "<Control-e>": self.resize_image_dialog,
-            "<Control-f>": self.fit_to_window,
-            "<Control-Key-0>": self.zoom_100,
-            "<Control-r>": lambda: self.rotate(90),
-            "<Control-l>": lambda: self.rotate(-90),
-            "<Control-h>": self.mirror_horizontal,
-            "<Control-Shift-h>": self.mirror_vertical,
-            "<Control-g>": self.grayscale,
-            "<Control-i>": self.invert,
-            "<Control-b>": self.black_white,
-            "<Control-k>": self.sharpen,
-            "<Control-Shift-b>": self.blur,
-            "<Control-Key-1>": self.adjust_brightness,
-            "<Control-Key-2>": self.adjust_contrast,
-            "<Control-Key-3>": self.adjust_saturation,
-            "<F5>": self.start_slideshow,
-            "<plus>": self.zoom_in,
-            "<equal>": self.zoom_in,
-            "<minus>": self.zoom_out,
-            "<Escape>": self.handle_escape,
-            "<Left>": self.previous_image,
-            "<Right>": self.next_image,
-            "<F11>": self.toggle_fullscreen,
-        }
-        for sequence, command in bindings.items():
-            self.root.bind(sequence, lambda e, cmd=command: cmd())
-
-    def handle_escape(self):
-        """Close image information first; otherwise leave fullscreen mode."""
-        if getattr(self, "info_panel_visible", False):
-            self.hide_image_information()
-        else:
-            self.exit_fullscreen()
-
-    # ---------- Language ----------
-
-    def load_language(self):
-        self.settings = self.load_settings()
-        self.lang = self.settings.get("language", "de")
-        self.theme = self.settings.get("theme", "dark")
-        try:
-            self.root.geometry(
-                f'{self.settings["window_width"]}x{self.settings["window_height"]}'
-            )
-            if self.settings.get("maximized"):
-                self.root.state("zoomed")
-        except Exception:
-            pass
-        self.zoom = self.settings.get("zoom", 100)
-        self.slideshow_interval = self.settings.get("slideshow_interval", 3)
-        self.retranslate()
-
-    def retranslate(self):
-        de = self.lang == "de"
-
-        self.root.title(f"Bildbetrachter {APP_VERSION}" if de else f"Image Viewer {APP_VERSION}")
-        self.rebuild_menu()
-        self.apply_theme()
-
-        self.btn_open.configure(text="Öffnen" if de else "Open")
-        self.btn_save.configure(text="Speichern" if de else "Save")
-        self.btn_undo.configure(text="Rückgängig" if de else "Undo")
-        self.btn_redo.configure(text="Wiederholen" if de else "Redo")
-        self.btn_left.configure(text="Links drehen" if de else "Rotate left")
-        self.btn_right.configure(text="Rechts drehen" if de else "Rotate right")
-        self.btn_mirror_h.configure(text="Horizontal" if de else "Horizontal")
-        self.btn_mirror_v.configure(text="Vertikal" if de else "Vertical")
-        self.btn_fit.configure(text="Anpassen" if de else "Fit")
-        self.btn_100.configure(text="100 %")
-        self.btn_full.configure(text="Vollbild" if de else "Fullscreen")
-        if hasattr(self, "info_title"):
-            self.info_title.configure(text="Bildinformationen" if de else "Image Information")
-        if hasattr(self, "info_close_button"):
-            self.info_close_button.configure(text="✕")
-        self.sidebar_title.configure(
-            text="Bilder im Ordner" if de else "Folder images"
-        )
-        self.btn_open_image_folder.configure(
-            text="📂 Gespeicherten Bildordner laden" if de else "📂 Load saved image folder"
-        )
-        self.update_current_folder_display()
-
-        self.update_ui()
+    def action(self,menu,text,fn,shortcut=None):
+        a=QAction(text,self); a.triggered.connect(lambda checked=False, callback=fn: callback())
+        if shortcut: a.setShortcut(QKeySequence(shortcut))
+        menu.addAction(a); return a
+    def build_menus(self):
+        t=self.tr; bar=self.menuBar()
+        m=bar.addMenu(t('Datei','File'))
+        self.action(m,t('Öffnen…','Open…'),self.open_dialog,'Ctrl+O'); self.action(m,t('Ordner öffnen…','Open folder…'),self.choose_folder,'Ctrl+Shift+O'); self.action(m,t('Speichern','Save'),self.save_image,'Ctrl+S'); self.action(m,t('Speichern unter…','Save as…'),self.save_as,'Ctrl+Shift+S'); m.addSeparator(); self.action(m,t('Drucken…','Print…'),self.print_image); self.action(m,t('Als Hintergrundbild setzen','Set as wallpaper'),self.wallpaper); m.addSeparator(); self.action(m,t('Beenden','Quit'),self.close,'Ctrl+Q')
+        m=bar.addMenu(t('Bearbeiten','Edit')); self.action(m,t('Rückgängig','Undo'),self.undo,'Ctrl+Z'); self.action(m,t('Wiederholen','Redo'),self.redo,'Ctrl+Y'); m.addSeparator(); self.action(m,t('Zeichnen…','Draw…'),self.draw_dialog); self.action(m,t('Zeichenmodus beenden','Exit drawing mode'),self.stop_draw); self.action(m,t('Zuschneiden (mit Maus)','Crop (with mouse)'),self.start_crop_mode,'Ctrl+Shift+X'); self.action(m,t('Größe ändern…','Resize…'),self.resize_dialog)
+        m=bar.addMenu(t('Ansicht','View')); self.action(m,t('An Fenster anpassen','Fit to window'),self.fit,'F'); self.action(m,'100 %',self.zoom100,'1'); self.action(m,t('Vergrößern','Zoom in'),lambda:self.zoom(1.2),'Ctrl++'); self.action(m,t('Verkleinern','Zoom out'),lambda:self.zoom(1/1.2),'Ctrl+-'); self.action(m,t('Vollbild','Fullscreen'),self.toggle_fullscreen,'F11'); self.action(m,t('Bildinformationen','Image information'),self.toggle_info,'Ctrl+I')
+        m=bar.addMenu(t('Bild','Image')); self.action(m,t('Links drehen','Rotate left'),lambda:self.rotate(90)); self.action(m,t('Rechts drehen','Rotate right'),lambda:self.rotate(-90)); self.action(m,t('Horizontal spiegeln','Flip horizontally'),self.mirror_h); self.action(m,t('Vertikal spiegeln','Flip vertically'),self.mirror_v); m.addSeparator(); self.action(m,t('Helligkeit…','Brightness…'),lambda:self.adjust(t('Helligkeit','Brightness'),ImageEnhance.Brightness)); self.action(m,t('Kontrast…','Contrast…'),lambda:self.adjust(t('Kontrast','Contrast'),ImageEnhance.Contrast)); self.action(m,t('Farbsättigung…','Saturation…'),lambda:self.adjust(t('Farbsättigung','Saturation'),ImageEnhance.Color)); self.action(m,t('Graustufen','Grayscale'),self.grayscale); self.action(m,t('Schwarz-Weiß','Black and white'),self.black_white); self.action(m,t('Invertieren','Invert'),self.invert); self.action(m,t('Schärfen','Sharpen'),self.sharpen); self.action(m,t('Weichzeichnen','Blur'),self.blur)
+        m=bar.addMenu(t('Werkzeuge','Tools')); self.action(m,t('Diashow starten/stoppen','Start/stop slideshow'),self.slideshow); self.action(m,t('Bildinformationen','Image information'),self.toggle_info); self.action(m,t('Einstellungen','Preferences'),self.preferences); m.addSeparator(); self.action(m,t('Sprache: Deutsch','Language: German'),lambda:self.set_language('de')); self.action(m,t('Sprache: Englisch','Language: English'),lambda:self.set_language('en'))
+        m=bar.addMenu(t('Design','Theme')); self.action(m,t('Blau (bunt)','Blue (colorful)'),lambda:self.set_theme('blue')); self.action(m,t('Dunkel','Dark'),lambda:self.set_theme('dark')); self.action(m,t('Hell','Light'),lambda:self.set_theme('light'))
+        m=bar.addMenu(t('Hilfe','Help')); self.action(m,t('Anleitung','User guide'),self.manual); self.action(m,t(self.tr('Über Bildbetrachter','About Image Viewer'),'About Image Viewer'),self.about)
 
     def set_language(self, language):
-        self.lang = "en" if language == "en" else "de"
+        self.lang = 'en' if language == 'en' else 'de'
+        self.settings['language'] = self.lang
         self.save_settings()
-        self.retranslate()
+        self.menuBar().clear()
+        self.build_menus()
+        self.setWindowTitle(f'{APP_NAME} {APP_VERSION}')
+        if hasattr(self,'toolbar_buttons'):
+            for b in self.toolbar_buttons: b.setText(b.property('en_text') if self.lang=='en' else b.property('de_text'))
+            self.side_title.setText(self.tr('▣  Bilder im Ordner','▣  Images in folder'))
+            self.folder_label.setText(self.tr('Aktueller Ordner: —','Current folder: —') if not self.path else self.tr('Aktueller Ordner:','Current folder:')+'\n'+str(Path(self.path).parent))
+            self.folder_btn.setText(self.tr('📁  Gespeicherten Bildordner laden','📁  Load saved image folder'))
+            self.info.setWindowTitle(self.tr('Bildinformationen','Image information'))
+            self.update_info()
+        self.status.showMessage(self.tr('Sprache geändert','Language changed'),2500)
 
+    def tr(self, de, en):
+        return en if self.lang == 'en' else de
 
-    def get_start_folder(self):
-        """Return the startup folder: last used, configured image folder, then app folder."""
-        last = str(self.settings.get("last_folder", "")).strip()
-        configured = str(self.settings.get("image_folder", "")).strip()
+    def localize_buttons(self, box, accept=None, reject=None, close=None):
+        if box.button(QDialogButtonBox.Ok): box.button(QDialogButtonBox.Ok).setText(accept or self.tr('OK','OK'))
+        if box.button(QDialogButtonBox.Cancel): box.button(QDialogButtonBox.Cancel).setText(reject or self.tr('Abbrechen','Cancel'))
+        if box.button(QDialogButtonBox.Close): box.button(QDialogButtonBox.Close).setText(close or self.tr('Schließen','Close'))
 
-        # The last actually used folder always has priority.
-        # If it no longer exists, fall back to the configured image folder.
-        # If that also fails, use the program's Bild folder.
-        candidates = [last, configured, str(Path(__file__).resolve().parent)]
+    def apply_theme(self):
+        themes={'blue':('#071629','#102b4a','#16436b','#1687e8','#28d7f2','#f4f8ff'),'dark':('#17191f','#242731','#303541','#5b7cfa','#38bdf8','#f2f4f8'),'light':('#edf1f8','#ffffff','#e5eaf4','#7357df','#16a6c4','#202638')}
+        bg,surface,raised,purple,cyan,fg=themes.get(self.theme,themes['blue'])
+        self.setStyleSheet(f"""
+        QMainWindow,QWidget{{background:{bg};color:{fg};font-size:10pt}} QMenuBar{{background:{surface};padding:5px}} QMenuBar::item{{padding:7px 10px;border-radius:5px}} QMenuBar::item:selected{{background:{purple}}}
+        QMenu{{background:{surface};border:1px solid {purple};padding:5px}} QMenu::item{{padding:7px 28px;border-radius:4px}} QMenu::item:selected{{background:{purple}}}
+        QFrame#toolbar{{background:{surface};border:1px solid {purple};border-radius:12px}} QFrame#sidebar{{background:{surface};border:1px solid {purple};border-radius:10px}} QLabel#sideTitle{{font-size:12pt;font-weight:bold;color:{cyan};padding:5px}}
+        QToolButton{{background: qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 {raised},stop:1 {surface});border:1px solid {purple};border-radius:9px;padding:6px;font-weight:bold}} QToolButton:hover{{background:{purple};border:1px solid {cyan}}} QToolButton:pressed{{background:{cyan};color:#071020}}
+        QPushButton{{background:{raised};border:1px solid {purple};border-radius:7px;padding:8px}} QPushButton:hover{{background:{purple}}}
+        QListWidget{{background:{bg};border:1px solid {raised};border-radius:8px;outline:0}} QListWidget::item{{background:{surface};border:1px solid {raised};border-radius:7px;padding:6px;margin:2px}} QListWidget::item:selected{{background:{purple};border:2px solid {cyan}}}
+        QStatusBar{{background:{surface};border-top:1px solid {purple}}} QDockWidget{{font-weight:bold}} QDockWidget::title{{background:{surface};padding:7px;color:{cyan}}}
+        QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox,QTextBrowser{{background:{surface};border:1px solid {purple};border-radius:5px;padding:5px}}
+        QScrollBar:vertical{{background:{surface};width:12px}} QScrollBar::handle:vertical{{background:{purple};border-radius:5px;min-height:25px}}
+        """)
 
-        for value in candidates:
-            if value:
-                folder = Path(value).expanduser()
-                if folder.is_dir():
-                    return folder
-
-        return Path(__file__).resolve().parent
-
-    def prepare_start_folder(self):
-        """Remember and display the folder used at startup without forcing an image open."""
-        folder = self.get_start_folder()
-        self.current_folder = folder
-        self.load_folder_images(folder)
-        self.settings["last_folder"] = str(folder)
+    def set_theme(self,t): self.theme=t; self.apply_theme(); self.save_settings()
+    def load_start_folder(self):
+        folder=self.settings.get('last_folder',str(Path.home()/'Pictures')); self.load_folder(folder)
+    def load_folder(self,folder):
+        p=Path(folder)
+        if not p.is_dir(): return
+        self.folder=sorted([str(x) for x in p.iterdir() if x.is_file() and x.suffix.lower() in SUPPORTED],key=lambda x:Path(x).name.lower())
+        self.list.blockSignals(True); self.list.clear(); self.thumb_cache.clear()
+        for f in self.folder:
+            item=QListWidgetItem(Path(f).name); item.setData(Qt.UserRole,f); item.setToolTip(f); self.list.addItem(item)
+        self.list.blockSignals(False); self.folder_label.setText(self.tr('Aktueller Ordner:','Current folder:')+'\n'+str(p)); self._thumb_timer.start(100); self.settings['last_folder']=str(p)
+        if self.path in self.folder: self.list.setCurrentRow(self.folder.index(self.path))
+        elif self.folder: self.list.setCurrentRow(0)
         self.save_settings()
-
-    def open_image(self):
-        filetypes = [
-            ("Bilddateien", "*.bmp *.dib *.gif *.jpg *.jpeg *.jpe *.jfif *.png *.webp *.tif *.tiff *.ico *.ppm *.pgm *.pbm *.pnm *.xbm *.xpm *.tga *.pcx"),
-            ("Alle Dateien", "*.*"),
-        ]
-        initialdir = self.get_start_folder()
-        path = filedialog.askopenfilename(
-            title="Bild öffnen" if self.lang == "de" else "Open image",
-            initialdir=str(initialdir),
-            filetypes=filetypes,
-        )
-        if not path:
-            return
-        self.load_image(path)
-
-    def load_image(self, path, add_history=False):
-        if not self.confirm_unsaved_changes():
-            return False
+    def choose_folder(self):
+        d=QFileDialog.getExistingDirectory(self,self.tr('Bildordner auswählen','Select image folder'),self.settings.get('last_folder',str(Path.home())))
+        if d: self.load_folder(d)
+    def open_dialog(self):
+        f,_=QFileDialog.getOpenFileName(self,self.tr('Bild öffnen','Open image'),self.settings.get('last_folder',str(Path.home())),'Bilder ('+' '.join('*'+x for x in sorted(SUPPORTED))+')')
+        if f:self.open_path(f)
+    def open_path(self,f):
         try:
-            img = Image.open(path).convert("RGBA")
-            if add_history and self.image is not None:
-                self.push_history()
-            self.image = img
-            self.original_image = img.copy()
-            self.image_path = str(path)
-            self.dirty = False
-            self.current_folder = Path(path).parent
-            self.settings["last_folder"] = str(self.current_folder)
-            self.save_settings()
-            self.zoom_factor = 1.0
-            self.fit_mode = True
-            self.history.clear()
-            self.redo_history.clear()
-            self.load_folder_images(Path(path).parent)
-            self.folder_index = self.folder_images.index(str(path)) if str(path) in self.folder_images else -1
-            self.show_image()
-            if getattr(self, "info_panel_visible", False):
-                self.update_image_information_panel()
-            self.update_ui()
-            return True
-        except Exception as exc:
-            messagebox.showerror(
-                "Fehler" if self.lang == "de" else "Error",
-                f"Bild konnte nicht geöffnet werden:\n{exc}",
-            )
-            return False
-
-    def save_image(self):
-        if self.image is None:
-            self.info_no_image()
-            return False
-        if not self.image_path:
-            return self.save_image_as()
-        return self.save_to_path(self.image_path)
-
-    def save_image_as(self):
-        if self.image is None:
-            self.info_no_image()
-            return False
-
-        path = filedialog.asksaveasfilename(
-            title="Bild speichern unter" if self.lang == "de" else "Save image as",
-            filetypes=[
-                ("PNG", "*.png"),
-                ("JPEG", "*.jpg"),
-                ("JPEG", "*.jpeg"),
-                ("BMP", "*.bmp"),
-                ("GIF", "*.gif"),
-                ("WebP", "*.webp"),
-                ("TIFF", "*.tif"),
-                ("TIFF", "*.tiff"),
-                ("ICO", "*.ico"),
-                ("PPM", "*.ppm"),
-                ("PGM", "*.pgm"),
-                ("PBM", "*.pbm"),
-                ("PNM", "*.pnm"),
-                ("XBM", "*.xbm"),
-                ("XPM", "*.xpm"),
-                ("TGA", "*.tga"),
-                ("PCX", "*.pcx"),
-            ],
-        )
-        if not path:
-            return False
-
-        ext = Path(path).suffix.lower()
-        if not ext:
-            ext = ".png"
-            path += ext
-
-        return self.save_to_path(path)
-
-    def save_to_path(self, path):
-        try:
-            ext = Path(path).suffix.lower()
-            image = self.image
-            if ext in (".jpg", ".jpeg"):
-                image.convert("RGB").save(path, "JPEG", quality=95)
-            elif ext == ".bmp":
-                image.convert("RGB").save(path, "BMP")
-            elif ext == ".gif":
-                image.convert("RGB").save(path, "GIF")
-            elif ext == ".webp":
-                image.save(path, "WEBP", quality=95)
-            elif ext in (".tif", ".tiff"):
-                image.save(path, "TIFF")
-            elif ext == ".png":
-                image.save(path, "PNG")
-            elif ext == ".ico":
-                image.save(path, "ICO")
-            elif ext in (".ppm", ".pgm", ".pbm", ".pnm"):
-                image.convert("RGB").save(path, ext[1:].upper())
-            elif ext in (".xbm", ".xpm"):
-                image.convert("RGB").save(path, ext[1:].upper())
-            elif ext == ".tga":
-                image.save(path, "TGA")
-            elif ext == ".pcx":
-                image.convert("RGB").save(path, "PCX")
-            elif ext == ".dib":
-                image.convert("RGB").save(path, "BMP")
-            elif ext in (".jpe", ".jfif"):
-                image.convert("RGB").save(path, "JPEG", quality=95)
-            else:
-                raise ValueError(f"Nicht unterstütztes Format: {ext}")
-
-            self.image_path = str(path)
-            self.dirty = False
-            self.status_var.set(
-                ("Gespeichert: " if self.lang == "de" else "Saved: ") + str(path)
-            )
-            return True
-        except Exception as exc:
-            messagebox.showerror(
-                "Fehler" if self.lang == "de" else "Error",
-                f"Bild konnte nicht gespeichert werden:\n{exc}",
-            )
-            return False
-
-    def confirm_unsaved_changes(self):
-        """Ask whether unsaved edits should be saved before leaving the image."""
-        if not self.dirty or self.image is None:
-            return True
-
-        de = self.lang == "de"
-        answer = messagebox.askyesnocancel(
-            "Bild geändert" if de else "Image changed",
-            "Das Bild wurde verändert. Soll es gespeichert werden?" if de
-            else "The image has been changed. Do you want to save it?",
-            parent=self.root,
-        )
-        if answer is True:
-            return self.save_image()
-        if answer is False:
-            return True
-        return False
-
-    def load_configured_image_folder(self):
-        """Make the folder saved in Settings the active folder inside the program."""
-        configured = str(self.settings.get("image_folder", "")).strip()
-        de = self.lang == "de"
-
-        if not configured:
-            messagebox.showinfo(
-                "Bildordner" if de else "Image folder",
-                "Unter Einstellungen ist noch kein Bildordner festgelegt." if de else
-                "No image folder has been configured in Settings yet."
-            )
-            return
-
-        folder = Path(configured).expanduser()
-        if not folder.is_dir():
-            messagebox.showwarning(
-                "Ordner nicht gefunden" if de else "Folder not found",
-                "Der in den Einstellungen gespeicherte Bildordner existiert nicht mehr." if de else
-                "The image folder saved in Settings no longer exists."
-            )
-            return
-
-        folder = folder.resolve()
-        self.current_folder = folder
-        self.settings["last_folder"] = str(folder)
-        self.save_settings()
-        self.load_folder_images(folder)
-
-        # Keep the currently displayed image, but make the selected folder the
-        # active navigation folder. If the image belongs to it, select it.
-        if self.image_path and Path(self.image_path).parent.resolve() == folder:
-            image_path = str(Path(self.image_path).resolve())
-            self.folder_index = self.folder_images.index(image_path) if image_path in self.folder_images else -1
+            im=Image.open(f); im.seek(0); im.load(); im=ImageOps.exif_transpose(im).convert('RGBA')
+        except Exception as e: QMessageBox.critical(self,self.tr('Bild kann nicht geöffnet werden','Could not open image'),str(e)); return
+        if self.dirty and not self.ask_save(): return
+        self.path=str(Path(f).resolve()); self.image=im; self.undo_stack=[]; self.redo_stack=[]; self.dirty=False; self.zoom_factor=1; self.fit_mode=True
+        parent=str(Path(self.path).parent)
+        if parent != self.settings.get('last_folder'): self.load_folder(parent)
         else:
-            self.folder_index = -1
+            try:self.list.setCurrentRow(self.folder.index(self.path))
+            except ValueError: pass
+        self.render(); self.update_info(); self.update_actions()
+    def select_row(self,row):
+        if 0<=row<len(self.folder):
+            f=self.folder[row]
+            if f!=self.path:self.open_path(f)
+            self.make_thumb(row)
+    def refresh_thumbs(self):
+        """Load only thumbnails whose item rectangles intersect the viewport."""
+        if not self.folder or not self.list.count(): return
+        viewport = self.list.viewport().rect()
+        wanted=[]
+        for row in range(self.list.count()):
+            rect=self.list.visualItemRect(self.list.item(row))
+            if rect.isValid() and rect.intersects(viewport): wanted.append(row)
+        # Keep a small buffer around the visible area for smooth scrolling.
+        if wanted:
+            lo=max(0,min(wanted)-1); hi=min(self.list.count(),max(wanted)+2)
+            wanted=list(range(lo,hi))
+        wanted=wanted[:self.thumb_limit]
+        wanted_set=set(wanted)
+        self._thumb_queue=[r for r in wanted if r not in self.thumb_cache]
+        for row in list(self.thumb_cache):
+            if row not in wanted_set:
+                self.thumb_cache.pop(row,None)
+                if 0<=row<self.list.count(): self.list.item(row).setIcon(QIcon())
+        if self._thumb_queue and not self._thumb_worker.isActive(): self._thumb_worker.start()
 
-        self.update_current_folder_display()
-        self.status_var.set(
-            (f"Aktueller Bildordner: {folder}" if de else f"Current image folder: {folder}")
-        )
+    def _thumb_batch(self):
+        # Decode a single thumbnail per tick so large photos never freeze scrolling.
+        if not self._thumb_queue:
+            self._thumb_worker.stop(); return
+        row=self._thumb_queue.pop(0)
+        self.make_thumb(row)
+        if not self._thumb_queue: self._thumb_worker.stop()
 
-    def update_current_folder_display(self):
-        folder = getattr(self, "current_folder", None)
-        if not hasattr(self, "current_folder_var"):
-            return
-        de = self.lang == "de"
-        if folder:
-            self.current_folder_var.set(
-                ("Aktueller Ordner:\n" if de else "Current folder:\n") + str(folder)
-            )
-        else:
-            self.current_folder_var.set(
-                "Kein Ordner" if de else "No folder"
-            )
-
-    def load_folder_images(self, folder):
+    def make_thumb(self,row):
+        if self.thumb_cache.get(row) is not None or not (0<=row<len(self.folder)): return
         try:
-            self.folder_images = sorted(
-                str(p) for p in folder.iterdir()
-                if p.is_file() and p.suffix.lower() in SUPPORTED
-            )
-        except OSError:
-            self.folder_images = []
-        self.build_thumbnails()
-
-    # ---------- History ----------
-
-    def push_history(self):
+            with Image.open(self.folder[row]) as im:
+                im.seek(0); im.thumbnail((150,100),Image.Resampling.LANCZOS)
+                q=self.pil_pixmap(im.convert('RGBA'))
+            self.list.item(row).setIcon(QIcon(q)); self.thumb_cache[row]=q
+            while len(self.thumb_cache)>self.thumb_limit:
+                old=next(iter(self.thumb_cache)); self.thumb_cache.pop(old,None)
+                if old!=row and 0<=old<self.list.count(): self.list.item(old).setIcon(QIcon())
+        except Exception:
+            # Keep a failed item retryable after the next refresh.
+            self.thumb_cache.pop(row, None)
+    def pil_pixmap(self,im):
+        im=im.convert('RGBA'); data=im.tobytes('raw','RGBA'); q=QImage(data,im.width,im.height,im.width*4,QImage.Format_RGBA8888).copy(); return QPixmap.fromImage(q)
+    def render(self):
+        self.canvas.scene().clear()
+        if self.image is None:return
+        pm=self.pil_pixmap(self.image); self.canvas.scene().addPixmap(pm); self.canvas.scene().setSceneRect(0,0,pm.width(),pm.height())
+        if self.fit_mode:self.canvas.fitInView(self.canvas.sceneRect(),Qt.KeepAspectRatio)
+        else:self.canvas.resetTransform(); self.canvas.scale(self.zoom_factor,self.zoom_factor)
+        self.update_status()
+    def fit(self): self.fit_mode=True; self.render()
+    def zoom100(self): self.fit_mode=False; self.zoom_factor=1; self.render()
+    def zoom(self,factor): self.fit_mode=False; self.zoom_factor=max(.05,min(8,self.zoom_factor*factor)); self.render()
+    def rotate(self,degrees):
+        if self.image is not None:self.edit(self.image.rotate(degrees,expand=True))
+    def mirror_h(self):
+        if self.image is not None:self.edit(ImageOps.mirror(self.image))
+    def mirror_v(self):
+        # Language changes must never modify the currently opened image.
+        for button in getattr(self, 'toolbar_buttons', []):
+            button.setText(button.property('de_text') if self.lang == 'de' else button.property('en_text'))
+        self.setWindowTitle(f'{APP_NAME} {APP_VERSION}')
+        self.info.setWindowTitle(self.tr('Bildinformationen','Image information'))
         if self.image is not None:
-            self.history.append(self.image.copy())
-            if len(self.history) > 30:
-                self.history.pop(0)
-            self.redo_history.clear()
-
-    def apply_edit(self, new_image):
-        if self.image is None:
-            return
-        self.push_history()
-        self.image = new_image.convert("RGBA")
-        self.dirty = True
-        self.zoom_factor = 1.0
-        self.fit_mode = True
-        self.show_image()
-        self.update_ui()
-
+            self.update_info(); self.update_status(); self.render()
+    def edit(self,new):
+        if self.image is None:return
+        self.undo_stack.append(self.image.copy()); self.undo_stack=self.undo_stack[-30:]; self.redo_stack.clear(); self.image=new.convert('RGBA'); self.dirty=True; self.render(); self.update_info(); self.update_actions()
     def undo(self):
-        if not self.history or self.image is None:
-            return
-        self.redo_history.append(self.image.copy())
-        self.image = self.history.pop()
-        self.dirty = True
-        self.zoom_factor = 1.0
-        self.fit_mode = True
-        self.show_image()
-        self.update_ui()
-
+        if self.undo_stack and self.image is not None:self.redo_stack.append(self.image.copy()); self.image=self.undo_stack.pop(); self.dirty=True; self.render(); self.update_info(); self.update_actions()
     def redo(self):
-        if not self.redo_history or self.image is None:
-            return
-        self.history.append(self.image.copy())
-        self.image = self.redo_history.pop()
-        self.dirty = True
-        self.zoom_factor = 1.0
-        self.fit_mode = True
-        self.show_image()
-        self.update_ui()
-
-    # ---------- Display ----------
-
-    def show_image(self):
-        if self.image is None:
-            self.canvas.delete("all")
-            self.image_display_x = 0
-            self.image_display_y = 0
-            return
-
-        w, h = self.image.size
-        new_w = max(1, int(w * self.zoom_factor))
-        new_h = max(1, int(h * self.zoom_factor))
-        resized = self.image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        self.photo = ImageTk.PhotoImage(resized)
-
-        self.canvas.delete("all")
-        cw = self.canvas.winfo_width()
-        ch = self.canvas.winfo_height()
-        x = max(0, (cw - new_w) // 2) if self.fit_mode and cw > new_w else 0
-        y = max(0, (ch - new_h) // 2) if self.fit_mode and ch > new_h else 0
-        # Merken, wo das Bild tatsächlich im Canvas beginnt. Das ist wichtig,
-        # weil das Bild im Fit-Modus mittig stehen kann.
-        self.image_display_x = x
-        self.image_display_y = y
-        self.canvas.create_image(x, y, anchor="nw", image=self.photo)
-        self.canvas.configure(scrollregion=(0, 0, max(cw, new_w), max(ch, new_h)))
-        self.zoom_var.set(f"{round(self.zoom_factor * 100)} %")
-
-    def fit_to_window(self):
-        if self.image is None:
-            return
-        self.root.update_idletasks()
-        cw = max(1, self.canvas.winfo_width() - 10)
-        ch = max(1, self.canvas.winfo_height() - 10)
-        iw, ih = self.image.size
-        self.zoom_factor = min(cw / iw, ch / ih)
-        self.zoom_factor = max(0.01, min(self.zoom_factor, 10))
-        self.fit_mode = True
-        self.show_image()
-
-    def zoom_100(self):
-        if self.image is None:
-            return
-        self.zoom_factor = 1.0
-        self.fit_mode = False
-        self.show_image()
-
-    def zoom_in(self):
-        if self.image is None:
-            return
-        self.zoom_factor = min(10.0, self.zoom_factor * 1.2)
-        self.fit_mode = False
-        self.show_image()
-
-    def zoom_out(self):
-        if self.image is None:
-            return
-        self.zoom_factor = max(0.01, self.zoom_factor / 1.2)
-        self.fit_mode = False
-        self.show_image()
-
-    def on_mouse_wheel(self, event):
-        delta = event.delta if hasattr(event, "delta") and event.delta else (120 if event.num == 4 else -120)
-        if delta > 0:
-            self.zoom_in()
-        else:
-            self.zoom_out()
-
-    def pan_start(self, event):
-        self.canvas.scan_mark(event.x, event.y)
-
-    def pan_move(self, event):
-        self.canvas.scan_dragto(event.x, event.y, gain=1)
-
-    # ---------- Crop ----------
-
-    def start_crop_mode(self):
-        if self.image is None:
-            self.info_no_image()
-            return
-        messagebox.showinfo(
-            "Zuschneiden" if self.lang == "de" else "Crop",
-            "Ziehe mit der linken Maustaste einen Bereich auf dem Bild auf."
-            if self.lang == "de"
-            else "Drag a rectangle over the image with the left mouse button.",
-        )
-        self.canvas.bind("<ButtonPress-1>", self.crop_start_event)
-        self.canvas.bind("<B1-Motion>", self.crop_move_event)
-        self.canvas.bind("<ButtonRelease-1>", self.crop_finish_event)
-
-    def crop_start_event(self, event):
-        self.crop_start = (self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
-        if self.crop_rect:
-            self.canvas.delete(self.crop_rect)
-        self.crop_rect = self.canvas.create_rectangle(
-            *self.crop_start, *self.crop_start, outline="red", width=2
-        )
-
-    def crop_move_event(self, event):
-        if not self.crop_start:
-            return
-        x0, y0 = self.crop_start
-        x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        self.canvas.coords(self.crop_rect, x0, y0, x1, y1)
-
-    def crop_finish_event(self, event):
-        if not self.crop_start or self.image is None:
-            return
-
-        # Canvas-Koordinaten in Bild-Koordinaten umrechnen.
-        # Wichtig: Im Fit-Modus kann das Bild innerhalb des Canvas zentriert
-        # sein. Deshalb müssen image_display_x/y vor der Zoom-Umrechnung
-        # abgezogen werden. Genau hier entstand bisher das Abschneiden links.
-        x0, y0 = self.crop_start
-        x1, y1 = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-
-        display_left = self.image_display_x
-        display_top = self.image_display_y
-        display_right = display_left + self.image.width * self.zoom_factor
-        display_bottom = display_top + self.image.height * self.zoom_factor
-
-        # Auswahl auf den tatsächlich sichtbaren Bildbereich begrenzen.
-        x0 = min(max(x0, display_left), display_right)
-        x1 = min(max(x1, display_left), display_right)
-        y0 = min(max(y0, display_top), display_bottom)
-        y1 = min(max(y1, display_top), display_bottom)
-
-        left, right = sorted((x0, x1))
-        top, bottom = sorted((y0, y1))
-
-        left = max(0, min(self.image.width, int((left - display_left) / self.zoom_factor)))
-        top = max(0, min(self.image.height, int((top - display_top) / self.zoom_factor)))
-        right = max(0, min(self.image.width, int((right - display_left) / self.zoom_factor)))
-        bottom = max(0, min(self.image.height, int((bottom - display_top) / self.zoom_factor)))
-
-        if right > left and bottom > top:
-            self.apply_edit(self.image.crop((left, top, right, bottom)))
-
-        self.crop_start = None
-        if self.crop_rect:
-            self.canvas.delete(self.crop_rect)
-            self.crop_rect = None
-        self.canvas.bind("<ButtonPress-1>", self.pan_start)
-        self.canvas.bind("<B1-Motion>", self.pan_move)
-        self.canvas.unbind("<ButtonRelease-1>")
-
-    # ---------- Drawing ----------
-
-    def start_draw_mode(self):
-        if self.image is None:
-            self.info_no_image()
-            return
-        de = self.lang == "de"
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Zeichnen" if de else "Draw")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        frame = tk.Frame(dialog, bg=self.colors["bg"], padx=18, pady=16)
-        frame.pack(fill="both", expand=True)
-
-        tk.Label(frame, text="Zeichenfarbe:" if de else "Drawing color:",
-                 bg=self.colors["bg"], fg=self.colors["fg"]).grid(row=0,column=0,sticky="w",pady=5)
-        color_var=tk.StringVar(value=self.draw_color)
-        preview=tk.Label(frame,textvariable=color_var,width=12,bg=self.draw_color,fg="#ffffff",relief="solid",bd=1)
-        preview.grid(row=0,column=1,padx=8,pady=5)
-
-        def choose_color():
-            result=colorchooser.askcolor(color=self.draw_color,
-                title="Zeichenfarbe auswählen" if de else "Choose drawing color",parent=dialog)
-            if result and result[1]:
-                self.draw_color=result[1]
-                color_var.set(self.draw_color)
-                preview.configure(bg=self.draw_color)
-
-        tk.Button(frame,text="Farbe wählen..." if de else "Choose color...",command=choose_color,
-                  bg=self.colors["surface2"],fg=self.colors["fg"],
-                  activebackground=self.colors["active"],activeforeground=self.colors["fg"],
-                  relief="flat",bd=0,padx=10,pady=5).grid(row=0,column=2,pady=5)
-
-        tk.Label(frame,text="Pinselgröße (Pixel):" if de else "Brush size (pixels):",
-                 bg=self.colors["bg"],fg=self.colors["fg"]).grid(row=1,column=0,sticky="w",pady=5)
-        size_var=tk.IntVar(value=self.draw_size)
-        tk.Spinbox(frame,from_=1,to=100,width=8,textvariable=size_var,
-                   bg=self.colors["surface"],fg=self.colors["fg"],
-                   insertbackground=self.colors["fg"]).grid(row=1,column=1,sticky="w",padx=8,pady=5)
-
-        tk.Label(frame,text=("Linke Maustaste gedrückt halten und zeichnen. Rechtsklick oder Esc beendet."
-                             if de else "Hold left mouse button to draw. Right-click or Esc ends drawing."),
-                 bg=self.colors["bg"],fg=self.colors["muted"],wraplength=430,justify="left"
-        ).grid(row=2,column=0,columnspan=3,sticky="w",pady=(10,14))
-
-        def activate():
-            try: self.draw_size=max(1,min(100,int(size_var.get())))
-            except (ValueError,tk.TclError): self.draw_size=5
-            dialog.destroy()
-            self._enter_draw_mode()
-        tk.Button(frame,text="Zeichenmodus starten" if de else "Start drawing",command=activate,
-                  bg=self.colors["surface2"],fg=self.colors["fg"],
-                  activebackground=self.colors["active"],activeforeground=self.colors["fg"],
-                  relief="flat",bd=0,padx=12,pady=6).grid(row=3,column=1,sticky="e")
-        dialog.bind("<Escape>",lambda _e:dialog.destroy())
-
-    def _enter_draw_mode(self):
-        self.draw_mode=True
-        self.draw_last_point=None
-        self.draw_stroke_active=False
-        self.canvas.configure(cursor="pencil")
-        self.canvas.unbind("<ButtonPress-1>")
-        self.canvas.unbind("<B1-Motion>")
-        self.canvas.unbind("<ButtonRelease-1>")
-        self.canvas.bind("<ButtonPress-1>",self.draw_start_event)
-        self.canvas.bind("<B1-Motion>",self.draw_move_event)
-        self.canvas.bind("<ButtonRelease-1>",self.draw_finish_event)
-        self.canvas.bind("<Button-3>",self._draw_cancel_event)
-
-    def _exit_draw_mode(self):
-        self.draw_mode=False
-        self.draw_last_point=None
-        self.draw_stroke_active=False
-        self.canvas.configure(cursor="")
-        self.canvas.unbind("<ButtonPress-1>")
-        self.canvas.unbind("<B1-Motion>")
-        self.canvas.unbind("<ButtonRelease-1>")
-        self.canvas.unbind("<Button-3>")
-        self.canvas.bind("<ButtonPress-1>",self.pan_start)
-        self.canvas.bind("<B1-Motion>",self.pan_move)
-
-    def _draw_cancel_event(self,_event=None):
-        self._exit_draw_mode()
-        return "break"
-
-    def _canvas_to_image_point(self,event):
-        if self.image is None or not self.zoom_factor: return None
-        x=self.canvas.canvasx(event.x); y=self.canvas.canvasy(event.y)
-        left=self.image_display_x; top=self.image_display_y
-        right=left+self.image.width*self.zoom_factor
-        bottom=top+self.image.height*self.zoom_factor
-        if x<left or y<top or x>right or y>bottom: return None
-        return (max(0,min(self.image.width-1,int((x-left)/self.zoom_factor))),
-                max(0,min(self.image.height-1,int((y-top)/self.zoom_factor))))
-
-    def draw_start_event(self,event):
-        point=self._canvas_to_image_point(event)
-        if not self.draw_mode or point is None: return "break"
-        self.push_history()
-        self.draw_last_point=point
-        self.draw_stroke_active=True
-        from PIL import ImageDraw
-        d=ImageDraw.Draw(self.image); r=max(0,self.draw_size//2); x,y=point
-        d.ellipse((x-r,y-r,x+r,y+r),fill=self.draw_color)
-        self.dirty=True
-        self.show_image()
-        # Das Rückgängig-/Wiederholen-UI muss sofort aktualisiert werden.
-        # Ohne diesen Aufruf bleibt Rückgängig nach dem ersten Zeichenstrich
-        # optisch/deaktiviert, obwohl der Verlauf bereits gespeichert wurde.
-        self.update_ui()
-        return "break"
-
-    def draw_move_event(self,event):
-        if not self.draw_mode or not self.draw_stroke_active or self.draw_last_point is None: return "break"
-        point=self._canvas_to_image_point(event)
-        if point is None: return "break"
-        from PIL import ImageDraw
-        d=ImageDraw.Draw(self.image); w=max(1,int(self.draw_size))
-        d.line([self.draw_last_point,point],fill=self.draw_color,width=w)
-        r=w//2; x,y=point
-        d.ellipse((x-r,y-r,x+r,y+r),fill=self.draw_color)
-        self.draw_last_point=point
-        self.dirty=True
-        self.show_image()
-        return "break"
-
-    def draw_finish_event(self,_event):
-        self.draw_last_point=None
-        self.draw_stroke_active=False
-        self.update_ui()
-        return "break"
-
-    # ---------- Image operations ----------
-
-    def rotate(self, degrees):
-        if self.image is not None:
-            self.apply_edit(self.image.rotate(-degrees, expand=True))
-
-    def mirror_horizontal(self):
-        if self.image is not None:
-            self.apply_edit(ImageOps.mirror(self.image))
-
-    def mirror_vertical(self):
-        if self.image is not None:
-            self.apply_edit(ImageOps.flip(self.image))
-
-    def resize_image_dialog(self):
-        """Dialog für eine frei wählbare exakte Bildgröße in Pixeln."""
-        if self.image is None:
-            self.info_no_image()
-            return
-
-        de = self.lang == "de"
-        w, h = self.image.size
-
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Größe ändern" if de else "Resize")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-
-        frame = tk.Frame(dialog, padx=18, pady=16)
-        frame.pack(fill="both", expand=True)
-
-        tk.Label(
-            frame,
-            text=("Exakte Größe in Pixeln" if de else "Exact size in pixels"),
-            font=("TkDefaultFont", 11, "bold"),
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
-
-        tk.Label(frame, text="Breite:" if de else "Width:").grid(
-            row=1, column=0, sticky="e", padx=(0, 6), pady=4
-        )
-        width_var = tk.StringVar(value=str(w))
-        width_entry = tk.Entry(frame, textvariable=width_var, width=10, justify="center")
-        width_entry.grid(row=1, column=1, sticky="w", pady=4)
-        tk.Label(frame, text="px").grid(row=1, column=2, sticky="w", padx=(5, 0))
-
-        tk.Label(frame, text="Höhe:" if de else "Height:").grid(
-            row=2, column=0, sticky="e", padx=(0, 6), pady=4
-        )
-        height_var = tk.StringVar(value=str(h))
-        height_entry = tk.Entry(frame, textvariable=height_var, width=10, justify="center")
-        height_entry.grid(row=2, column=1, sticky="w", pady=4)
-        tk.Label(frame, text="px").grid(row=2, column=2, sticky="w", padx=(5, 0))
-
-        tk.Label(
-            frame,
-            text=(f"Aktuell: {w} × {h} Pixel" if de else f"Current: {w} × {h} pixels"),
-            fg="gray",
-        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 4))
-
-        def apply_resize():
-            try:
-                new_w = int(width_var.get().strip())
-                new_h = int(height_var.get().strip())
-                if not (1 <= new_w <= 20000 and 1 <= new_h <= 20000):
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror(
-                    "Ungültige Größe" if de else "Invalid size",
-                    ("Bitte gültige positive Pixelwerte eingeben."
-                     if de else "Please enter valid positive pixel values."),
-                    parent=dialog,
-                )
-                return
-
-            self.apply_edit(
-                self.image.resize((new_w, new_h), Image.Resampling.LANCZOS)
-            )
-            dialog.destroy()
-
-        buttons = tk.Frame(frame)
-        buttons.grid(row=4, column=0, columnspan=3, sticky="e", pady=(14, 0))
-
-        tk.Button(
-            buttons,
-            text="Abbrechen" if de else "Cancel",
-            command=dialog.destroy,
-        ).pack(side="right", padx=(8, 0))
-
-        tk.Button(
-            buttons,
-            text="Ändern" if de else "Resize",
-            command=apply_resize,
-        ).pack(side="right")
-
-        width_entry.focus_set()
-        width_entry.select_range(0, "end")
-        dialog.bind("<Return>", lambda _event: apply_resize())
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-
-    def adjust(self, title_de, title_en, prompt_de, prompt_en, func):
-        if self.image is None:
-            self.info_no_image()
-            return
-        value = simpledialog.askfloat(
-            title_de if self.lang == "de" else title_en,
-            prompt_de if self.lang == "de" else prompt_en,
-            initialvalue=1.0,
-            minvalue=0.0,
-            maxvalue=3.0,
-        )
-        if value is not None:
-            self.apply_edit(func(value))
-
-    def adjust_brightness(self):
-        self.adjust("Helligkeit", "Brightness", "Faktor (1,0 = unverändert):",
-                    "Factor (1.0 = unchanged):", ImageEnhance.Brightness(self.image).enhance)
-
-    def adjust_contrast(self):
-        self.adjust("Kontrast", "Contrast", "Faktor (1,0 = unverändert):",
-                    "Factor (1.0 = unchanged):", ImageEnhance.Contrast(self.image).enhance)
-
-    def adjust_saturation(self):
-        self.adjust("Sättigung", "Saturation", "Faktor (1,0 = unverändert):",
-                    "Factor (1.0 = unchanged):", ImageEnhance.Color(self.image).enhance)
-
+        if self.redo_stack and self.image is not None:self.undo_stack.append(self.image.copy()); self.image=self.redo_stack.pop(); self.dirty=True; self.render(); self.update_info(); self.update_actions()
+    def save_image(self):
+        if self.image is None:return
+        if not self.path:self.save_as();return
+        self.write_image(self.path)
+    def save_as(self):
+        if self.image is None:return
+        f,_=QFileDialog.getSaveFileName(self,self.tr('Bild speichern unter','Save image as'),self.path or '', 'Bilder (*.png *.jpg *.jpeg *.webp *.tif *.bmp)')
+        if f:self.write_image(f); self.path=f
+    def write_image(self,f):
+        try:
+            out=self.image
+            ext=Path(f).suffix.lower()
+            if ext in ('.jpg','.jpeg'):out=out.convert('RGB')
+            out.save(f); self.dirty=False; self.update_status(); self.status.showMessage(self.tr('Bild gespeichert: ','Image saved: ')+f,4000)
+        except Exception as e:QMessageBox.critical(self,self.tr('Speichern fehlgeschlagen','Save failed'),str(e))
+    def ask_save(self):
+        dlg=QDialog(self); dlg.setWindowTitle(self.tr('Ungespeicherte Änderungen','Unsaved changes')); dlg.setModal(True)
+        layout=QVBoxLayout(dlg); label=QLabel(self.tr('Änderungen am Bild speichern?','Save changes to the image?')); label.setWordWrap(True); layout.addWidget(label)
+        buttons=QDialogButtonBox(); close_btn=buttons.addButton(self.tr('Ohne Speichern schließen','Close without saving'),QDialogButtonBox.DestructiveRole); cancel_btn=buttons.addButton(self.tr('Abbrechen','Cancel'),QDialogButtonBox.RejectRole); save_btn=buttons.addButton(self.tr('Speichern','Save'),QDialogButtonBox.AcceptRole)
+        layout.addWidget(buttons); choice={'value':'cancel'}
+        close_btn.clicked.connect(lambda:(choice.update(value='discard'),dlg.accept()))
+        save_btn.clicked.connect(lambda:(choice.update(value='save'),dlg.accept()))
+        cancel_btn.clicked.connect(dlg.reject)
+        dlg.exec()
+        if choice['value']=='save': self.save_image(); return not self.dirty
+        return choice['value']=='discard'
+    def closeEvent(self,e):
+        if self.dirty and not self.ask_save():e.ignore();return
+        self.save_settings();e.accept()
+    def previous(self):
+        if self.folder and self.list.currentRow()>=0:self.list.setCurrentRow((self.list.currentRow()-1)%len(self.folder))
+    def next(self):
+        if self.folder and self.list.currentRow()>=0:self.list.setCurrentRow((self.list.currentRow()+1)%len(self.folder))
+    def adjust(self,name,cls):
+        if self.image is None:return
+        dlg=QDialog(self); dlg.setWindowTitle(name); form=QFormLayout(dlg)
+        value=QDoubleSpinBox(); value.setRange(0.0,4.0); value.setDecimals(1); value.setSingleStep(.1); value.setValue(1.0)
+        form.addRow(self.tr('Faktor (1,0 = unverändert):','Factor (1.0 = unchanged):'),value)
+        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel); self.localize_buttons(buttons); form.addRow(buttons)
+        buttons.accepted.connect(dlg.accept); buttons.rejected.connect(dlg.reject)
+        if dlg.exec():self.edit(cls(self.image).enhance(value.value()))
     def grayscale(self):
-        if self.image is not None:
-            self.apply_edit(ImageOps.grayscale(self.image).convert("RGBA"))
-
+        if self.image is not None:self.edit(ImageOps.grayscale(self.image).convert('RGBA'))
     def invert(self):
         if self.image is not None:
-            rgb = ImageOps.invert(self.image.convert("RGB"))
-            self.apply_edit(rgb.convert("RGBA"))
-
+            rgb=ImageOps.invert(self.image.convert('RGB')); self.edit(rgb.convert('RGBA'))
     def black_white(self):
-        if self.image is not None:
-            gray = ImageOps.grayscale(self.image)
-            self.apply_edit(gray.point(lambda p: 255 if p >= 128 else 0).convert("RGBA"))
-
+        if self.image is not None:self.edit(self.image.convert('L').point(lambda p:255 if p>128 else 0).convert('RGBA'))
     def sharpen(self):
-        if self.image is not None:
-            self.apply_edit(self.image.filter(ImageFilter.SHARPEN))
-
+        if self.image is not None:self.edit(self.image.filter(ImageFilter.SHARPEN))
     def blur(self):
-        if self.image is not None:
-            self.apply_edit(self.image.filter(ImageFilter.GaussianBlur(radius=2)))
-
-    # ---------- Folder navigation / thumbnails ----------
-
-    def _on_thumb_scroll(self, event):
-        if getattr(event, "num", None) == 4:
-            self.thumb_canvas.yview_scroll(-3, "units")
-        elif getattr(event, "num", None) == 5:
-            self.thumb_canvas.yview_scroll(3, "units")
-        elif getattr(event, "delta", 0):
-            steps = int(-event.delta / 120) or (-1 if event.delta > 0 else 1)
-            self.thumb_canvas.yview_scroll(steps * 3, "units")
-        self._schedule_thumb_refresh()
-        return "break"
-
-    def _schedule_thumb_refresh(self):
-        if self._thumb_refresh_job is None:
-            try:
-                self._thumb_refresh_job = self.root.after(80, self._refresh_visible_thumbnails)
-            except tk.TclError:
-                self._thumb_refresh_job = None
-
-    def _refresh_visible_thumbnails(self):
-        self._thumb_refresh_job = None
-        if not self.thumb_canvas.winfo_exists():
-            return
-        count = len(self.folder_images)
-        row_h = self._thumb_row_height
-        width = max(140, self.thumb_canvas.winfo_width())
-        height = max(row_h, self.thumb_canvas.winfo_height())
-        self.thumb_canvas.configure(scrollregion=(0, 0, width, count * row_h))
-        if not count:
-            wanted = set()
-        else:
-            first = max(0, int(self.thumb_canvas.canvasy(0) // row_h))
-            visible = max(1, (height // row_h) + 2)
-            slots = min(self._thumb_max_cache, visible)
-            first = min(first, max(0, count - slots))
-            wanted = set(range(first, min(count, first + slots)))
-
-        for index in list(self._thumb_items):
-            if index not in wanted:
-                item, widget, _photo = self._thumb_items.pop(index)
-                try:
-                    self.thumb_canvas.delete(item)
-                    widget.destroy()
-                except tk.TclError:
-                    pass
-
-        for index in sorted(wanted):
-            if index in self._thumb_items:
-                item, widget, photo = self._thumb_items[index]
-                self.thumb_canvas.coords(item, 0, index * row_h)
-                self.thumb_canvas.itemconfigure(item, width=width)
-                continue
-            path = self.folder_images[index]
-            try:
-                with Image.open(path) as source:
-                    dimensions = source.size
-                    source.thumbnail((118, 88), Image.Resampling.LANCZOS)
-                    preview = source.convert("RGB")
-                photo = ImageTk.PhotoImage(preview)
-                preview.close()
-                card = ttk.Frame(self.thumb_canvas, style="Sidebar.TFrame")
-                image_button = ttk.Button(card, image=photo, command=lambda p=path: self.load_image(p))
-                image_button.pack(side="left", padx=4, pady=3)
-                info = ttk.Frame(card, style="Sidebar.TFrame")
-                info.pack(side="left", fill="both", expand=True)
-                name = Path(path).name
-                ttk.Label(info, text=(name if len(name) < 30 else name[:27] + "…"),
-                          style="ThumbName.TLabel", wraplength=165).pack(anchor="w", pady=(8, 3))
-                try:
-                    size = Path(path).stat().st_size
-                    size_text = f"{size/1048576:.1f} MB" if size >= 1048576 else f"{size/1024:.1f} KB"
-                except OSError:
-                    size_text = "?"
-                ttk.Label(info, text=f"{dimensions[0]} × {dimensions[1]} px  ·  {size_text}",
-                          style="ThumbInfo.TLabel").pack(anchor="w")
-                item = self.thumb_canvas.create_window((0, index * row_h), window=card,
-                                                       anchor="nw", width=width, height=row_h-3)
-                self._thumb_items[index] = (item, card, photo)
-            except (OSError, ValueError, tk.TclError):
-                continue
-        # Strikte Obergrenze: nie mehr als 20 Vorschaubild-Widgets/PhotoImages.
-        while len(self._thumb_items) > self._thumb_max_cache:
-            old = next(iter(self._thumb_items))
-            item, widget, _photo = self._thumb_items.pop(old)
-            self.thumb_canvas.delete(item)
-            widget.destroy()
-
-    def build_thumbnails(self):
-        if self._thumb_refresh_job is not None:
-            try: self.root.after_cancel(self._thumb_refresh_job)
-            except tk.TclError: pass
-            self._thumb_refresh_job = None
-        for item, widget, _photo in list(self._thumb_items.values()):
-            try:
-                self.thumb_canvas.delete(item)
-                widget.destroy()
-            except tk.TclError:
-                pass
-        self._thumb_items.clear()
-        self.thumbnails.clear()
-        self.thumb_buttons.clear()
-        self.thumb_canvas.yview_moveto(0)
-        self.thumb_canvas.configure(scrollregion=(0, 0, max(1, self.thumb_canvas.winfo_width()),
-                                                  len(self.folder_images) * self._thumb_row_height))
-        self._schedule_thumb_refresh()
-
-    def show_context_menu(self, event):
-        if self.draw_mode:
-            self._draw_cancel_event(event)
-            return "break"
-        menu = tk.Menu(self.root, tearoff=0)
-        de = self.lang == "de"
-        menu.add_command(label="Bild öffnen…" if de else "Open image…", command=self.open_image)
-        menu.add_command(label="Vorheriges Bild" if de else "Previous image", command=self.previous_image,
-                         state="normal" if self.folder_images else "disabled")
-        menu.add_command(label="Nächstes Bild" if de else "Next image", command=self.next_image,
-                         state="normal" if self.folder_images else "disabled")
-        menu.add_separator()
-        menu.add_command(label="Speichern" if de else "Save", command=self.save_image,
-                         state="normal" if self.image is not None else "disabled")
-        menu.add_command(label="Speichern unter…" if de else "Save as…", command=self.save_image_as,
-                         state="normal" if self.image is not None else "disabled")
-        menu.add_separator()
-        menu.add_command(label="90° links drehen" if de else "Rotate left", command=lambda: self.rotate(-90),
-                         state="normal" if self.image is not None else "disabled")
-        menu.add_command(label="90° rechts drehen" if de else "Rotate right", command=lambda: self.rotate(90),
-                         state="normal" if self.image is not None else "disabled")
-        menu.add_command(label="Horizontal spiegeln" if de else "Flip horizontal", command=self.mirror_horizontal,
-                         state="normal" if self.image is not None else "disabled")
-        menu.add_command(label="Vertikal spiegeln" if de else "Flip vertical", command=self.mirror_vertical,
-                         state="normal" if self.image is not None else "disabled")
-        menu.add_separator()
-        menu.add_command(label="An Fenster anpassen" if de else "Fit to window", command=self.fit_to_window,
-                         state="normal" if self.image is not None else "disabled")
-        menu.add_command(label="Originalgröße (100 %)" if de else "Actual size (100%)", command=self.zoom_100,
-                         state="normal" if self.image is not None else "disabled")
-        menu.add_separator()
-        menu.add_command(label="Bildinformationen / Eigenschaften" if de else "Image information / Properties",
-                         command=self.show_image_information,
-                         state="normal" if self.image is not None else "disabled")
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            try: menu.grab_release()
-            except tk.TclError: pass
-        return "break"
-
-    def previous_image(self):
-        if not self.folder_images:
-            return
-        self.folder_index = (self.folder_index - 1) % len(self.folder_images)
-        self.load_image(self.folder_images[self.folder_index])
-
-    def next_image(self):
-        if not self.folder_images:
-            return
-        self.folder_index = (self.folder_index + 1) % len(self.folder_images)
-        self.load_image(self.folder_images[self.folder_index])
-
-    # ---------- Slideshow ----------
-
-    def start_slideshow(self):
-        if not self.folder_images:
-            self.info_no_image()
-            return
-        self.slideshow_running = True
-        self.slideshow_step()
-
-    def slideshow_step(self):
-        if not getattr(self, "slideshow_running", False):
-            return
-        self.next_image()
-        self.root.after(3000, self.slideshow_step)
-
-    def stop_slideshow(self):
-        self.slideshow_running = False
-
-    # ---------- Fullscreen ----------
-
-    def toggle_fullscreen(self):
-        current = bool(self.root.attributes("-fullscreen"))
-        self.root.attributes("-fullscreen", not current)
-
-    def exit_fullscreen(self):
-        self.root.attributes("-fullscreen", False)
-
-    # ---------- System actions ----------
-
-    def print_image(self):
-        if not self.image_path:
-            self.info_no_image()
-            return
-        try:
-            system = platform.system()
-            if system == "Linux":
-                subprocess.Popen(["lp", self.image_path])
-            elif system == "Windows":
-                os.startfile(self.image_path, "print")
-            elif system == "Darwin":
-                subprocess.Popen(["open", self.image_path])
-            else:
-                raise RuntimeError("Drucken wird auf diesem System nicht automatisch unterstützt.")
-        except Exception as exc:
-            messagebox.showerror(
-                "Fehler" if self.lang == "de" else "Error",
-                f"Drucken konnte nicht gestartet werden:\n{exc}",
-            )
-
-    def set_wallpaper(self):
-        if not self.image_path:
-            self.info_no_image()
-            return
-        path = os.path.abspath(self.image_path)
-        try:
-            system = platform.system()
-            if system == "Windows":
-                import ctypes
-                ctypes.windll.user32.SystemParametersInfoW(20, 0, path, 3)
-            elif system == "Linux":
-                uri = Path(path).as_uri()
-                subprocess.Popen(["gsettings", "set", "org.gnome.desktop.background", "picture-uri", uri])
-                subprocess.Popen(["gsettings", "set", "org.gnome.desktop.background", "picture-uri-dark", uri])
-            elif system == "Darwin":
-                subprocess.Popen(["osascript", "-e", f'tell application "System Events" to tell every desktop to set picture to POSIX file "{path}"'])
-            else:
-                raise RuntimeError("Nicht unterstütztes Betriebssystem.")
-        except Exception as exc:
-            messagebox.showerror(
-                "Fehler" if self.lang == "de" else "Error",
-                f"Hintergrundbild konnte nicht gesetzt werden:\n{exc}",
-            )
-
-    def set_theme(self, theme):
-        if theme not in ("dark", "light"):
-            return
-        self.theme = theme
-        self.settings["theme"] = theme
-        self.save_settings()
-        self.apply_theme()
-        self.rebuild_menu()
-        self.update_ui()
-
-    # ---------- Settings ----------
-
-    def load_settings(self):
-        defaults = {
-            "language": "de", "theme": "dark", "last_folder": "", "image_folder": "",
-            "geometry": "", "window_width": 1200, "window_height": 760,
-            "maximized": False, "zoom": 100, "slideshow_interval": 3,
-        }
-
-        # Prefer the per-user XDG config file. On first run, migrate the old
-        # program-directory INI or the older JSON file without deleting either.
-        source = SETTINGS_FILE if SETTINGS_FILE.exists() else None
-        if source is None and LEGACY_LOCAL_SETTINGS_FILE.exists():
-            source = LEGACY_LOCAL_SETTINGS_FILE
-        if source is not None:
-            try:
-                cfg = configparser.ConfigParser()
-                cfg.read(source, encoding="utf-8")
-                sec = cfg["General"] if "General" in cfg else {}
-                for key in ("language", "theme", "last_folder", "image_folder", "geometry"):
-                    if key in sec:
-                        defaults[key] = sec.get(key, defaults[key])
-                for key in ("window_width", "window_height", "zoom", "slideshow_interval"):
-                    if key in sec:
-                        try:
-                            defaults[key] = int(sec.get(key))
-                        except (ValueError, TypeError):
-                            pass
-                if "maximized" in sec:
-                    defaults["maximized"] = sec.getboolean("maximized", fallback=False)
-                if source != SETTINGS_FILE:
-                    self._write_settings_file(defaults)
-                return defaults
-            except Exception:
-                pass
-
-        try:
-            if LEGACY_SETTINGS_FILE.exists():
-                data = json.loads(LEGACY_SETTINGS_FILE.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    defaults.update({k: v for k, v in data.items() if k in defaults})
-                    self._write_settings_file(defaults)
-        except Exception:
-            pass
-        return defaults
-
-    def _write_settings_file(self, values):
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        cfg = configparser.ConfigParser()
-        cfg["General"] = {
-            "language": str(values.get("language", "de")),
-            "theme": str(values.get("theme", "dark")),
-            "last_folder": str(values.get("last_folder", "")),
-            "image_folder": str(values.get("image_folder", "")),
-            "geometry": str(values.get("geometry", "")),
-            "window_width": str(values.get("window_width", 1200)),
-            "window_height": str(values.get("window_height", 760)),
-            "maximized": str(bool(values.get("maximized", False))),
-            "zoom": str(values.get("zoom", 100)),
-            "slideshow_interval": str(values.get("slideshow_interval", 3)),
-        }
-        with SETTINGS_FILE.open("w", encoding="utf-8") as handle:
-            handle.write("; Bildbetrachter Einstellungen\n")
-            cfg.write(handle)
-
-    def save_settings(self):
-        try:
-            self._write_settings_file(self.settings)
-        except Exception:
-            pass
-
-    def show_settings(self):
-        de = self.lang == "de"
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Einstellungen" if de else "Settings")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-        dialog.configure(bg=self.colors["bg"])
-
-        frame = tk.Frame(dialog, bg=self.colors["bg"], padx=22, pady=20)
-        frame.pack(fill="both", expand=True)
-
-        tk.Label(frame, text="Bildordner" if de else "Image folder",
-                 bg=self.colors["bg"], fg=self.colors["fg"],
-                 font=("TkDefaultFont", 12, "bold")).grid(
-                     row=2, column=0, columnspan=3, sticky="w", pady=(18, 8))
-
-        folder_var = tk.StringVar(value=str(self.settings.get("image_folder", "")))
-        tk.Label(frame, text="Pfad:" if de else "Path:",
-                 bg=self.colors["bg"], fg=self.colors["fg"]).grid(
-                     row=3, column=0, sticky="w", padx=(0, 14), pady=4)
-
-        folder_entry = tk.Entry(
-            frame, textvariable=folder_var, width=52,
-            bg=self.colors["surface"], fg=self.colors["fg"],
-            insertbackground=self.colors["fg"],
-            relief="solid", highlightthickness=1)
-        folder_entry.grid(row=3, column=1, sticky="ew", pady=4)
-
-        def choose_folder():
-            initial = folder_var.get().strip() or str(self.get_start_folder())
-            selected = filedialog.askdirectory(
-                parent=dialog,
-                title="Bildordner auswählen" if de else "Select image folder",
-                initialdir=initial if Path(initial).is_dir() else str(Path(__file__).resolve().parent))
-            if selected:
-                folder_var.set(selected)
-
-        ttk.Button(
-            frame, text="Durchsuchen..." if de else "Browse...",
-            command=choose_folder).grid(row=3, column=2, padx=(8, 0), pady=4)
-
-        last_folder = str(self.settings.get("last_folder", "")).strip()
-        last_display = last_folder if last_folder else (
-            "Noch kein Ordner gespeichert." if de else "No folder saved yet.")
-
-        tk.Label(
-            frame,
-            text=("Zuletzt verwendeter Ordner: " if de else "Last used folder: ") + last_display,
-            bg=self.colors["bg"], fg=self.colors["muted"],
-            justify="left", anchor="w", wraplength=560
-        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 4))
-
-        tk.Label(
-            frame,
-            text=("Beim Start wird zuerst der zuletzt verwendete Ordner geöffnet. "
-                  "Ist er nicht vorhanden, wird der eingestellte Bildordner verwendet. "
-                  "Falls auch dieser fehlt, wird der Programmordner „Bild“ verwendet."
-                  if de else
-                  "At startup, the last used folder is opened first. "
-                  "If it no longer exists, the configured image folder is used. "
-                  "If that is also unavailable, the program folder „Bild“ is used."),
-            bg=self.colors["bg"], fg=self.colors["muted"],
-            justify="left", anchor="w", wraplength=560
-        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 14))
-
-        def apply_and_close():
-
-            folder = folder_var.get().strip()
-            if folder and Path(folder).expanduser().is_dir():
-                folder = str(Path(folder).expanduser().resolve())
-                self.settings["image_folder"] = folder
-                self.current_folder = Path(folder)
-                self.load_folder_images(self.current_folder)
-            elif folder:
-                messagebox.showwarning(
-                    "Ungültiger Ordner" if de else "Invalid folder",
-                    "Der angegebene Bildordner existiert nicht." if de else
-                    "The selected image folder does not exist.",
-                    parent=dialog)
-                return
-
-            self.save_settings()
-            self.build_menu()
-            self.update_ui()
-            dialog.destroy()
-
-        ttk.Button(
-            frame, text="Übernehmen" if de else "Apply",
-            command=apply_and_close).grid(
-                row=6, column=1, columnspan=2, sticky="e", pady=(4, 0))
-
-        folder_entry.focus_set()
-
-
-        tk.Label(frame, text="Bildordner" if de else "Image folder",
-                 bg=self.colors["bg"], fg=self.colors["fg"],
-                 font=("TkDefaultFont", 12, "bold")).grid(row=2, column=0, columnspan=3, sticky="w", pady=(22, 10))
-        tk.Label(frame, text="Pfad:" if de else "Path:",
-                 bg=self.colors["bg"], fg=self.colors["fg"]).grid(row=3, column=0, sticky="w", padx=(0, 14))
-
-        folder_var = tk.StringVar(value=self.settings.get("image_folder", ""))
-        folder_entry = tk.Entry(frame, textvariable=folder_var, width=42,
-                                bg=self.colors["surface"], fg=self.colors["fg"],
-                                insertbackground=self.colors["fg"], relief="flat", bd=0)
-        folder_entry.grid(row=3, column=1, sticky="ew", ipady=6)
-
-        def choose_folder():
-            selected = filedialog.askdirectory(
-                title="Bildordner auswählen" if de else "Select image folder",
-                initialdir=str(self.get_start_folder())
-            )
-            if selected:
-                folder_var.set(selected)
-
-        tk.Button(frame, text="Durchsuchen..." if de else "Browse...", command=choose_folder,
-                  bg=self.colors["surface2"], fg=self.colors["fg"],
-                  activebackground=self.colors["active"], activeforeground=self.colors["fg"],
-                  relief="flat", bd=0, padx=10, pady=6).grid(row=3, column=2, padx=(8, 0))
-
-        last_folder = self.settings.get("last_folder", "")
-        last_text = last_folder if last_folder else ("Noch kein Ordner gespeichert." if de else "No folder saved yet.")
-        tk.Label(frame, text=("Zuletzt verwendet: " if de else "Last used: ") + last_text,
-                 bg=self.colors["bg"], fg=self.colors["muted"], wraplength=520, justify="left").grid(
-                     row=4, column=0, columnspan=3, sticky="w", pady=(10, 6))
-        tk.Label(frame, text=(
-            "Beim Start wird zuerst der hier eingestellte Bildordner verwendet. Ist er nicht vorhanden, "
-            "wird der zuletzt verwendete Ordner geöffnet. Falls auch dieser fehlt, wird der Programmordner 'Bild' verwendet."
-            if de else
-            "At startup, the configured image folder is used first. If it is unavailable, the last used folder is used. "
-            "If that folder is also unavailable, the program folder 'Bild' is used."),
-            bg=self.colors["bg"], fg=self.colors["muted"], wraplength=520, justify="left"
-        ).grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 16))
-
-        def save_and_close():
-            folder = folder_var.get().strip()
-            if folder:
-                folder_path = Path(folder).expanduser()
-                if not folder_path.is_dir():
-                    messagebox.showwarning(
-                        "Ordner nicht gefunden" if de else "Folder not found",
-                        "Der eingegebene Bildordner existiert nicht." if de else "The entered image folder does not exist.",
-                        parent=dialog
-                    )
-                    return
-                folder = str(folder_path.resolve())
-                self.settings["image_folder"] = folder
-                self.settings["last_folder"] = folder
-            else:
-                self.settings["image_folder"] = ""
-            self.save_settings()
-            self.prepare_start_folder()
-            dialog.destroy()
-
-        tk.Button(frame, text="OK", width=10, command=save_and_close,
-                  bg=self.colors["surface2"], fg=self.colors["fg"],
-                  activebackground=self.colors["active"], activeforeground=self.colors["fg"],
-                  relief="flat", bd=0, padx=10, pady=6).grid(row=6, column=2, sticky="e")
-
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
-        dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
-
-    # ---------- Misc ----------
-
-    def show_image_information(self):
-        """Show the information panel only when explicitly requested.
-
-        Selecting a thumbnail always opens the image in the main preview.
-        The panel stays hidden until this action is invoked from the menu.
-        Once opened, it remains visible and updates for subsequently selected images.
-        """
-        if self.image is None or not self.image_path:
-            self.info_no_image()
-            return
-
-        if not self.info_panel_visible:
-            # Insert the information panel between thumbnails and main preview.
-            self.info_panel.pack(side="left", fill="y", padx=(0, 1))
-            self.info_panel_visible = True
-        self.update_image_information_panel()
-
-    def hide_image_information(self):
-        """Close the optional information panel without changing the image."""
-        if getattr(self, "info_panel_visible", False):
-            self.info_panel.pack_forget()
-            self.info_panel_visible = False
-
-
-    def update_image_information_panel(self):
-        """Refresh the visible information panel without changing the image view."""
-        if not hasattr(self, "info_body") or self.image is None or not self.image_path:
-            return
-        try:
-            p = Path(self.image_path)
-            stat = p.stat()
-            size_bytes = stat.st_size
-            if size_bytes < 1024:
-                file_size = f"{size_bytes} B"
-            elif size_bytes < 1024 * 1024:
-                file_size = f"{size_bytes / 1024:.1f} KB"
-            else:
-                file_size = f"{size_bytes / (1024 * 1024):.2f} MB"
-
-            width, height = self.image.size
-            fmt = self.image.format or p.suffix.lstrip(".").upper()
-            mode = self.image.mode
-            modified = datetime.fromtimestamp(stat.st_mtime).strftime("%d.%m.%Y %H:%M:%S")
-            transparency = "Ja" if "A" in mode else "Nein"
-
-            if self.lang == "de":
-                info = (
-                    f"Dateiname:\n{p.name}\n\n"
-                    f"Ordner:\n{p.parent}\n\n"
-                    f"Abmessungen:\n{width} × {height} Pixel\n\n"
-                    f"Dateigröße:\n{file_size}\n({size_bytes:,} Bytes)\n\n"
-                    f"Dateityp:\n{fmt}-Bild\n\n"
-                    f"Letzte Änderung:\n{modified}\n\n"
-                    f"Transparenz:\n{transparency}"
-                )
-            else:
-                transparency = "Yes" if "A" in mode else "No"
-                info = (
-                    f"Filename:\n{p.name}\n\n"
-                    f"Folder:\n{p.parent}\n\n"
-                    f"Dimensions:\n{width} × {height} pixels\n\n"
-                    f"File size:\n{file_size}\n({size_bytes:,} bytes)\n\n"
-                    f"File type:\n{fmt} image\n\n"
-                    f"Modified:\n{modified}\n\n"
-                    f"Transparency:\n{transparency}"
-                )
-
-            self.info_body.configure(state="normal")
-            self.info_body.delete("1.0", "end")
-            self.info_body.insert("1.0", info)
-            self.info_body.configure(state="disabled")
-        except Exception as exc:
-            self.info_body.configure(state="normal")
-            self.info_body.delete("1.0", "end")
-            self.info_body.insert("1.0", str(exc))
-            self.info_body.configure(state="disabled")
-
-    def info_no_image(self):
-        messagebox.showinfo(
-            "Hinweis" if self.lang == "de" else "Information",
-            "Kein Bild geladen." if self.lang == "de" else "No image loaded.",
-        )
-
-    def about(self):
-        messagebox.showinfo(
-            "Über Bildbetrachter" if self.lang == "de" else "About Image Viewer",
-            "Bildbetrachter\n\nEin kompakter Bildbetrachter und einfacher Bildeditor."
-            if self.lang == "de"
-            else "Image Viewer\n\nA compact image viewer and simple image editor.",
-        )
-
-    def update_ui(self):
-        self.btn_undo.configure(state="normal" if self.history else "disabled")
-        self.btn_redo.configure(state="normal" if self.redo_history else "disabled")
-
+        if self.image is not None:self.edit(self.image.filter(ImageFilter.BLUR))
+    def draw_dialog(self):
         if self.image is None:
-            self.status_var.set("Kein Bild geöffnet" if self.lang == "de" else "No image open")
+            QMessageBox.information(self, self.tr('Zeichnen','Draw'), self.tr('Bitte zuerst ein Bild öffnen.','Please open an image first.'))
             return
+        dlg=QDialog(self); dlg.setWindowTitle(self.tr('Zeichnen','Draw')); form=QFormLayout(dlg)
+        color_btn=QPushButton(self.draw_color); color_btn.setStyleSheet(f'background:{self.draw_color};color:white;font-weight:bold;padding:8px')
+        chosen={'color':self.draw_color}
+        def choose_color():
+            c=QColorDialog.getColor(QColor(chosen['color']),dlg,self.tr('Zeichenfarbe auswählen','Choose drawing color'))
+            if c.isValid():
+                chosen['color']=c.name(); color_btn.setText(c.name()); color_btn.setStyleSheet(f'background:{c.name()};color:white;font-weight:bold;padding:8px')
+        color_btn.clicked.connect(choose_color); form.addRow(self.tr('Zeichenfarbe:','Drawing color:'),color_btn)
+        size=QSpinBox(); size.setRange(1,100); size.setValue(self.draw_size); size.setSuffix(' px'); form.addRow(self.tr('Pinselgröße:','Brush size:'),size)
+        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel); self.localize_buttons(buttons); form.addRow(buttons); buttons.accepted.connect(dlg.accept); buttons.rejected.connect(dlg.reject)
+        if dlg.exec():
+            self.draw_color=chosen['color']; self.draw_size=size.value(); self.draw_mode=True; self.draw_active=False
+            self.canvas.setCursor(Qt.CrossCursor); self.status.showMessage(self.tr('Zeichenmodus: linke Maustaste gedrückt halten und zeichnen · Rechtsklick beendet','Drawing mode: hold the left mouse button to draw · right-click to finish'))
+    def stop_draw(self):
+        self.draw_mode=False; self.draw_active=False; self.draw_last=None; self._draw_before=None
+        self.canvas.setCursor(Qt.ArrowCursor); self.render(); self.status.showMessage(self.tr('Zeichenmodus beendet','Drawing mode ended'),2500)
+    def _draw_point(self, scene_point):
+        if self.image is None:return None
+        x=int(scene_point.x()); y=int(scene_point.y())
+        if 0 <= x < self.image.width and 0 <= y < self.image.height:return (x,y)
+        return None
+    def draw_begin(self, scene_point):
+        pt=self._draw_point(scene_point)
+        if pt is None:return
+        self._draw_before=self.image.copy(); self.draw_active=True; self.draw_last=pt
+        d=ImageDraw.Draw(self.image); r=max(0,self.draw_size//2); x,y=pt
+        d.ellipse((x-r,y-r,x+r,y+r),fill=self.draw_color); self.dirty=True; self.render()
+    def draw_continue(self, scene_point):
+        pt=self._draw_point(scene_point)
+        if pt is None or self.draw_last is None:return
+        d=ImageDraw.Draw(self.image); w=max(1,self.draw_size)
+        d.line([self.draw_last,pt],fill=self.draw_color,width=w)
+        r=w//2; x,y=pt; d.ellipse((x-r,y-r,x+r,y+r),fill=self.draw_color)
+        self.draw_last=pt; self.dirty=True; self.render()
+    def draw_end(self):
+        if self.draw_active and self._draw_before is not None:
+            self.undo_stack.append(self._draw_before); self.undo_stack=self.undo_stack[-30:]; self.redo_stack.clear()
+            self.update_info(); self.update_actions()
+        self.draw_active=False; self.draw_last=None; self._draw_before=None
+        self.update_status()
 
-        w, h = self.image.size
-        name = Path(self.image_path).name if self.image_path else "-"
-        self.status_var.set(
-            f"{name}  |  {w} × {h} px  |  {self.zoom_var.get()}"
-        )
-
-    def on_close(self):
-        if not self.confirm_unsaved_changes():
+    def resize_dialog(self):
+        if self.image is None:return
+        dlg=QDialog(self); dlg.setWindowTitle(self.tr('Bildgröße ändern','Resize image')); form=QFormLayout(dlg)
+        width=QSpinBox(); width.setRange(1,30000); width.setValue(self.image.width)
+        height=QSpinBox(); height.setRange(1,30000); height.setValue(self.image.height)
+        keep=QCheckBox(self.tr('Seitenverhältnis beibehalten','Keep aspect ratio')); keep.setChecked(True)
+        ratio=self.image.width/max(1,self.image.height)
+        lock={'busy':False}
+        def width_changed(v):
+            if keep.isChecked() and not lock['busy']:
+                lock['busy']=True; height.setValue(max(1,round(v/ratio))); lock['busy']=False
+        def height_changed(v):
+            if keep.isChecked() and not lock['busy']:
+                lock['busy']=True; width.setValue(max(1,round(v*ratio))); lock['busy']=False
+        width.valueChanged.connect(width_changed); height.valueChanged.connect(height_changed)
+        form.addRow(self.tr('Breite in Pixel:','Width in pixels:'),width)
+        form.addRow(self.tr('Höhe in Pixel:','Height in pixels:'),height)
+        form.addRow('',keep)
+        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel); self.localize_buttons(buttons); form.addRow(buttons)
+        buttons.accepted.connect(dlg.accept); buttons.rejected.connect(dlg.reject)
+        if dlg.exec():self.edit(self.image.resize((width.value(),height.value()),Image.Resampling.LANCZOS))
+    def start_crop_mode(self):
+        if self.image is None:
+            QMessageBox.information(self, self.tr('Zuschneiden','Crop'), self.tr('Bitte zuerst ein Bild öffnen.','Please open an image first.'))
             return
-        self.settings["geometry"] = self.root.geometry()
-        if getattr(self, "current_folder", None):
-            self.settings["last_folder"] = str(self.current_folder)
-        self.save_settings()
-        self.stop_slideshow()
-        self.root.destroy()
+        self.crop_mode=True; self.crop_active=False; self.crop_origin=None; self.crop_rect=None
+        self.canvas.setCursor(Qt.CrossCursor)
+        self.status.showMessage(self.tr('Mit der linken Maustaste einen Rahmen aufziehen; loslassen zum Zuschneiden. Esc bricht ab.','Drag a rectangle with the left mouse button; release to crop. Esc cancels.'))
 
+    def crop_begin(self, point):
+        if self.image is None:return
+        self.crop_origin=point; self.crop_active=True
+        if self.crop_rect is not None:
+            try:self.canvas.scene().removeItem(self.crop_rect)
+            except Exception:pass
+        self.crop_rect=QGraphicsRectItem(); self.crop_rect.setPen(QPen(QColor('#20c8ff'),2,Qt.DashLine)); self.crop_rect.setBrush(QColor(32,160,255,45)); self.canvas.scene().addItem(self.crop_rect)
+        self.crop_update(point)
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = ImageViewerApp(root)
-    if len(sys.argv) > 1:
-        incoming = sys.argv[1]
-        root.after(100, lambda p=incoming: (app.load_image(p), app.fit_to_window()))
-    else:
-        root.after(150, app.fit_to_window)
-    root.mainloop()
+    def crop_update(self, point):
+        if not self.crop_active or self.crop_origin is None or self.crop_rect is None:return
+        x1=max(0,min(self.image.width,self.crop_origin.x())); y1=max(0,min(self.image.height,self.crop_origin.y()))
+        x2=max(0,min(self.image.width,point.x())); y2=max(0,min(self.image.height,point.y()))
+        self.crop_rect.setRect(min(x1,x2),min(y1,y2),abs(x2-x1),abs(y2-y1))
+
+    def crop_finish(self):
+        if not self.crop_active:return
+        rect=self.crop_rect.rect() if self.crop_rect is not None else None
+        if self.crop_rect is not None:
+            try:self.canvas.scene().removeItem(self.crop_rect)
+            except Exception:pass
+        self.crop_rect=None; self.crop_active=False; self.crop_mode=False; self.crop_origin=None; self.canvas.setCursor(Qt.ArrowCursor)
+        if rect and rect.width()>=2 and rect.height()>=2:
+            box=(max(0,int(rect.left())),max(0,int(rect.top())),min(self.image.width,int(rect.right())),min(self.image.height,int(rect.bottom())))
+            if box[2]>box[0] and box[3]>box[1]:self.edit(self.image.crop(box))
+        else:self.render()
+        self.status.showMessage(self.tr('Zuschneiden beendet','Crop mode ended'),2500)
+
+    def cancel_crop(self):
+        if self.crop_rect is not None:
+            try:self.canvas.scene().removeItem(self.crop_rect)
+            except Exception:pass
+        self.crop_rect=None; self.crop_active=False; self.crop_mode=False; self.crop_origin=None; self.canvas.setCursor(Qt.ArrowCursor); self.render()
+
+    def crop_dialog(self):
+        self.start_crop_mode()
+
+    def slideshow(self):
+        self.slideshow_active=not self.slideshow_active
+        if self.slideshow_active:QTimer.singleShot(self.slideshow_interval*1000,self.slide_step)
+        else:self.status.showMessage(self.tr('Diashow beendet','Slideshow stopped'),2500)
+    def slide_step(self):
+        if self.slideshow_active:self.next();QTimer.singleShot(self.slideshow_interval*1000,self.slide_step)
+    def toggle_fullscreen(self): self.showNormal() if self.isFullScreen() else self.showFullScreen()
+    def toggle_info(self): self.info.setVisible(not self.info.isVisible())
+    def update_info(self):
+        if self.image is None:return
+        f=Path(self.path); size=f.stat().st_size if f.exists() else 0
+        self.info_text.setText(f'<b>{self.tr("Datei:","File:")}</b> {f.name}<br><b>{self.tr("Pfad:","Path:")}</b> {self.path}<br><b>{self.tr("Abmessungen:","Dimensions:")}</b> {self.image.width} × {self.image.height} px<br><b>{self.tr("Dateigröße:","File size:")}</b> {size/1024:.1f} KB<br><b>{self.tr("Format:","Format:")}</b> {f.suffix.upper()}')
+    def update_status(self):
+        if self.image is None:self.status.showMessage(self.tr('Kein Bild geöffnet','No image open'));return
+        name=Path(self.path).name if self.path else 'Unbenannt'; self.status.showMessage(f'{name}  |  {self.image.width} × {self.image.height} px  |  {self.zoom_factor*100:.0f} %'+('  |  Änderungen nicht gespeichert' if self.dirty else ''))
+    def update_actions(self): self.save_button.setEnabled(self.image is not None); self.save_button.setToolTip(self.tr('Speichert Änderungen in der geöffneten Originaldatei (Strg+S)','Saves changes to the opened original file (Ctrl+S)'))
+    def show_context_menu(self,pos):
+        m=QMenu(self); entries=[(self.tr('Öffnen…','Open…'),self.open_dialog),(self.tr('Vorheriges Bild','Previous image'),self.previous),(self.tr('Nächstes Bild','Next image'),self.next),None,(self.tr('Speichern','Save'),self.save_image),(self.tr('Speichern unter…','Save as…'),self.save_as),None,(self.tr('Links drehen','Rotate left'),lambda:self.rotate(90)),(self.tr('Rechts drehen','Rotate right'),lambda:self.rotate(-90)),(self.tr('Horizontal spiegeln','Flip horizontally'),self.mirror_h),(self.tr('Vertikal spiegeln','Flip vertically'),self.mirror_v),None,(self.tr('An Fenster anpassen','Fit to window'),self.fit),('100 %',self.zoom100),(self.tr('Bildinformationen','Image information'),self.toggle_info)]
+        for entry in entries:
+            if entry is None:m.addSeparator()
+            else:
+                a=m.addAction(entry[0]); a.triggered.connect(entry[1])
+        m.exec(pos)
+    def thumb_context(self,p):
+        item=self.list.itemAt(p)
+        if item:self.list.setCurrentItem(item);self.show_context_menu(self.list.mapToGlobal(p))
+    def manual(self):
+        de = """<h1>Bildbetrachter 0.1.19 – Anleitung</h1>
+<h2>1. Überblick</h2><p>Links befindet sich die Dateiliste des geöffneten Bildordners. Rechts sehen Sie das aktuelle Bild. Oben liegt die Werkzeugleiste; unten zeigt die Statusleiste Dateiname, Bildgröße und Zoomstufe. Das Fenster kann in der Größe verändert werden; die Fenstergeometrie wird beim Beenden gespeichert.</p>
+<h2>2. Bilder und Ordner öffnen</h2><ul><li><b>Datei → Öffnen</b> oder <b>Strg+O</b>: einzelne Bilddatei auswählen.</li><li><b>Datei → Ordner öffnen</b> oder <b>Strg+Umschalt+O</b>: Ordner laden. Die unterstützten Bilder erscheinen links in der Liste.</li><li>Ein Bild in der Liste anklicken, um es anzuzeigen. Mit den Pfeiltasten bzw. den Funktionen Vorheriges/Nächstes im Kontextmenü zwischen Bildern wechseln.</li><li>Ein Bild kann auch als Programmargument über „Öffnen mit“ gestartet werden.</li></ul>
+<h2>3. Speichern – wichtig</h2><ul><li><b>Datei → Speichern</b> oder <b>Strg+S</b>: schreibt die Bearbeitung in die aktuell geöffnete Originaldatei. Das Original wird überschrieben.</li><li><b>Datei → Speichern unter</b> oder <b>Strg+Umschalt+S</b>: speichert eine neue Datei unter einem anderen Namen/Ort.</li><li>Beim Beenden mit ungespeicherten Änderungen fragt das Programm, ob gespeichert, ohne Speichern geschlossen oder abgebrochen werden soll.</li><li>JPEG speichert ohne Transparenz; transparente Bereiche werden beim JPEG-Export in RGB umgewandelt.</li></ul>
+<h2>4. Bearbeiten</h2><ul><li><b>Rückgängig – Strg+Z:</b> nimmt den letzten Bearbeitungsschritt zurück.</li><li><b>Wiederholen – Strg+Y:</b> stellt einen zurückgenommenen Schritt wieder her.</li><li><b>Zeichnen:</b> Bearbeiten → Zeichnen. Farbe im Farbdialog wählen und Pinselgröße in Pixeln einstellen. Danach im Bild die linke Maustaste gedrückt halten und zeichnen. Rechtsklick bzw. „Zeichenmodus beenden“ beendet das Zeichnen. Zeichnungen lassen sich über Rückgängig zurücknehmen.</li><li><b>Zuschneiden:</b> Bearbeiten → Zuschneiden (mit Maus) oder Strg+Umschalt+X. Mit linker Maustaste einen Rahmen über den gewünschten Bildbereich ziehen und loslassen. Esc bricht den Modus ab.</li><li><b>Größe ändern:</b> Bearbeiten → Größe ändern. Breite und Höhe in einem Dialog eingeben. Das Seitenverhältnis kann beibehalten oder aufgehoben werden. Das Bild wird auf diese Maße skaliert.</li></ul>
+<h2>5. Bildkorrekturen (Menü „Bild“)</h2><ul><li><b>Links/Rechts drehen:</b> dreht das Bild um 90 Grad.</li><li><b>Horizontal/Vertikal spiegeln:</b> spiegelt das Bild an der entsprechenden Achse.</li><li><b>Helligkeit, Kontrast, Farbsättigung:</b> Faktor eingeben. 1,0 bedeutet unverändert; kleinere Werte reduzieren, größere Werte verstärken den Effekt.</li><li><b>Graustufen:</b> entfernt die Farbinformation.</li><li><b>Schwarz-Weiß:</b> wandelt anhand eines Schwellenwerts in reines Schwarz und Weiß um.</li><li><b>Invertieren:</b> kehrt die RGB-Farbwerte um.</li><li><b>Schärfen/Weichzeichnen:</b> wendet einen entsprechenden Filter an.</li></ul>
+<h2>6. Ansicht und Zoom</h2><ul><li><b>Mausrad nach oben/unten:</b> hinein- bzw. herauszoomen; der Zoom orientiert sich am Mauszeiger.</li><li><b>Ansicht → An Fenster anpassen</b> oder F: skaliert das ganze Bild passend in den verfügbaren Anzeigebereich.</li><li><b>100 %</b> oder Taste 1: zeigt das Bild in Originalpixelgröße.</li><li><b>Vergrößern/Verkleinern:</b> Strg++ / Strg+-.</li><li><b>Vollbild:</b> F11. Erneut F11 stellt das normale Fenster wieder her.</li><li><b>Bildinformationen:</b> Strg+I oder Ansicht/Werkzeuge → Bildinformationen. Zeigt Dateiname, Pfad, Abmessungen, Dateigröße und Format.</li><li>Zum Verschieben der vergrößerten Ansicht die mittlere Maustaste bzw. die Hand-Verschiebefunktion der Bildfläche verwenden.</li></ul>
+<h2>7. Diashow</h2><p>Werkzeuge → Diashow starten/stoppen. Die Diashow wechselt durch die Bilder des geladenen Ordners. Das Intervall wird unter Werkzeuge → Einstellungen zwischen 1 und 60 Sekunden festgelegt und dauerhaft gespeichert. Zum Beenden den Diashow-Befehl erneut wählen.</p>
+<h2>8. Kontextmenü</h2><p>Rechtsklick auf die Bildfläche oder einen Eintrag der Vorschauliste öffnet das Kontextmenü. Es bietet Öffnen, vorheriges/nächstes Bild, Speichern/Speichern unter, Drehen, Spiegeln, An Fenster anpassen, 100 % und Bildinformationen.</p>
+<h2>9. Einstellungen, Sprache und Design</h2><ul><li><b>Werkzeuge → Einstellungen:</b> Sprache, Design und Diashow-Intervall festlegen. Übernehmen speichert die Auswahl.</li><li><b>Sprache:</b> Deutsch oder English. Alternativ stehen im Menü Werkzeuge direkte Spracheinträge zur Verfügung.</li><li><b>Design:</b> Blau (bunt), Dunkel oder Hell.</li><li>Einstellungen und Fenstergeometrie werden in <code>~/.config/bildbetrachter/settings.ini</code> gespeichert.</li></ul>
+<h2>10. Drucken und Hintergrundbild</h2><ul><li><b>Datei → Drucken:</b> übergibt die aktuell geöffnete Datei an die im System zugeordnete Anwendung. Der eigentliche Druckdialog hängt von dieser Anwendung ab.</li><li><b>Als Hintergrundbild setzen:</b> zeigt einen Hinweis; das Hintergrundbild wird über die Desktop-Einstellungen des Systems festgelegt.</li></ul>
+<h2>11. Unterstützte Formate</h2><p>Unter anderem BMP, DIB, GIF, JPG/JPEG, PNG, WebP, TIFF, ICO, PPM/PGM/PBM/PNM, XBM, XPM, TGA und PCX. Ob ein spezielles Dateiprofil korrekt gelesen wird, hängt auch von der installierten Pillow-Version ab.</p>
+<h2>12. Tastenkürzel</h2><table border='1' cellspacing='0' cellpadding='5'><tr><th>Taste</th><th>Funktion</th></tr><tr><td>Strg+O</td><td>Bild öffnen</td></tr><tr><td>Strg+Umschalt+O</td><td>Ordner öffnen</td></tr><tr><td>Strg+S</td><td>Original überschreiben</td></tr><tr><td>Strg+Umschalt+S</td><td>Speichern unter</td></tr><tr><td>Strg+Z / Strg+Y</td><td>Rückgängig / Wiederholen</td></tr><tr><td>F</td><td>An Fenster anpassen</td></tr><tr><td>1</td><td>100 %</td></tr><tr><td>Strg++ / Strg+-</td><td>Zoom hinein / heraus</td></tr><tr><td>F11</td><td>Vollbild umschalten</td></tr><tr><td>Strg+I</td><td>Bildinformationen</td></tr><tr><td>Strg+Umschalt+X</td><td>Zuschneiden</td></tr><tr><td>Strg+Q</td><td>Beenden</td></tr><tr><td>Esc</td><td>Zuschneidemodus abbrechen</td></tr></table>
+<p><b>Hinweis:</b> Speichern überschreibt absichtlich die Originaldatei. Wenn Sie das Original behalten möchten, verwenden Sie vor dem Bearbeiten oder Speichern „Speichern unter“.</p>"""
+        en = """<h1>Image Viewer 0.1.19 – User Guide</h1>
+<h2>1. Overview</h2><p>The folder's image list is on the left and the current image is on the right. The toolbar is at the top; the status bar shows the file name, image dimensions and zoom level. Window size and position are saved when you exit.</p>
+<h2>2. Open images and folders</h2><ul><li><b>File → Open</b> or <b>Ctrl+O</b>: choose one image.</li><li><b>File → Open folder</b> or <b>Ctrl+Shift+O</b>: load a folder. Supported images appear in the left list.</li><li>Click an item in the list to display it. Use previous/next navigation or the context menu to move between images.</li><li>You can also launch the application with an image path, including via the desktop “Open With” action.</li></ul>
+<h2>3. Saving – important</h2><ul><li><b>File → Save</b> or <b>Ctrl+S</b>: writes edits to the currently opened original file and overwrites it.</li><li><b>File → Save As</b> or <b>Ctrl+Shift+S</b>: saves a separate copy at another path/name.</li><li>When closing with unsaved edits, the application asks whether to save, discard changes or cancel closing.</li><li>JPEG does not support transparency; transparent images are converted to RGB when exported as JPEG.</li></ul>
+<h2>4. Editing</h2><ul><li><b>Undo – Ctrl+Z:</b> reverses the most recent edit.</li><li><b>Redo – Ctrl+Y:</b> reapplies an undone edit.</li><li><b>Draw:</b> Edit → Draw. Choose a color and brush width in pixels. Then hold the left mouse button and draw on the image. Right-click or choose “Exit drawing mode” to stop. Use Undo to remove a drawing.</li><li><b>Crop:</b> Edit → Crop (with mouse) or Ctrl+Shift+X. Drag a rectangle with the left mouse button and release to crop. Esc cancels crop mode.</li><li><b>Resize:</b> Edit → Resize. Enter the new width and height in pixels.</li></ul>
+<h2>5. Image adjustments (Image menu)</h2><ul><li><b>Rotate left/right:</b> rotate by 90 degrees.</li><li><b>Flip horizontally/vertically:</b> mirror along the selected axis.</li><li><b>Brightness, Contrast, Saturation:</b> enter a factor. 1.0 means unchanged; lower values reduce and higher values increase the effect.</li><li><b>Grayscale:</b> removes color information.</li><li><b>Black and white:</b> converts the image to pure black and white using a threshold.</li><li><b>Invert:</b> inverts RGB color values.</li><li><b>Sharpen/Blur:</b> applies the corresponding image filter.</li></ul>
+<h2>6. View and zoom</h2><ul><li><b>Mouse wheel up/down:</b> zoom in/out, anchored around the pointer.</li><li><b>View → Fit to window</b> or F: fit the whole image into the available viewing area.</li><li><b>100%</b> or 1: show the image at native pixel size.</li><li><b>Zoom in/out:</b> Ctrl++ / Ctrl+-.</li><li><b>Fullscreen:</b> F11 toggles fullscreen.</li><li><b>Image information:</b> Ctrl+I or View/Tools → Image information. Shows file name, path, dimensions, file size and format.</li><li>Pan a zoomed image using the middle mouse button or the view's hand-drag behavior.</li></ul>
+<h2>7. Slideshow</h2><p>Choose Tools → Start/stop slideshow. The slideshow advances through images in the loaded folder. Set the interval from 1 to 60 seconds in Tools → Preferences; the value is saved.</p>
+<h2>8. Context menu</h2><p>Right-click the image area or an item in the thumbnail list. The menu provides Open, Previous/Next, Save/Save As, Rotate, Flip, Fit to window, 100% and Image information.</p>
+<h2>9. Preferences, language and theme</h2><ul><li><b>Tools → Preferences:</b> choose language, theme and slideshow interval. Apply saves the settings.</li><li><b>Language:</b> German or English. Direct language commands are also available in the Tools menu.</li><li><b>Theme:</b> Blue (colorful), Dark or Light.</li><li>Settings and window geometry are stored in <code>~/.config/bildbetrachter/settings.ini</code>.</li></ul>
+<h2>10. Print and wallpaper</h2><ul><li><b>File → Print:</b> hands the current file to the system-associated application; the actual print dialog depends on that application.</li><li><b>Set as wallpaper:</b> displays a note; configure the wallpaper through your desktop environment's settings.</li></ul>
+<h2>11. Supported formats</h2><p>Including BMP, DIB, GIF, JPG/JPEG, PNG, WebP, TIFF, ICO, PPM/PGM/PBM/PNM, XBM, XPM, TGA and PCX. Support for special profiles also depends on the installed Pillow version.</p>
+<h2>12. Keyboard shortcuts</h2><table border='1' cellspacing='0' cellpadding='5'><tr><th>Shortcut</th><th>Action</th></tr><tr><td>Ctrl+O</td><td>Open image</td></tr><tr><td>Ctrl+Shift+O</td><td>Open folder</td></tr><tr><td>Ctrl+S</td><td>Overwrite original</td></tr><tr><td>Ctrl+Shift+S</td><td>Save As</td></tr><tr><td>Ctrl+Z / Ctrl+Y</td><td>Undo / Redo</td></tr><tr><td>F</td><td>Fit to window</td></tr><tr><td>1</td><td>100%</td></tr><tr><td>Ctrl++ / Ctrl+-</td><td>Zoom in / out</td></tr><tr><td>F11</td><td>Toggle fullscreen</td></tr><tr><td>Ctrl+I</td><td>Image information</td></tr><tr><td>Ctrl+Shift+X</td><td>Crop</td></tr><tr><td>Ctrl+Q</td><td>Quit</td></tr><tr><td>Esc</td><td>Cancel crop mode</td></tr></table>
+<p><b>Note:</b> Save intentionally overwrites the original file. Use Save As if you want to keep the original unchanged.</p>"""
+        dlg=QDialog(self); dlg.setWindowTitle(self.tr('Ausführliche Anleitung','Full user guide')); dlg.resize(820,720)
+        layout=QVBoxLayout(dlg); browser=QTextBrowser(); browser.setOpenExternalLinks(True); browser.setHtml(de if self.lang=='de' else en); layout.addWidget(browser)
+        close=QDialogButtonBox(QDialogButtonBox.Close); self.localize_buttons(close); close.rejected.connect(dlg.reject); close.accepted.connect(dlg.accept); layout.addWidget(close); dlg.exec()
+    def about(self): QMessageBox.about(self,self.tr('Über Bildbetrachter','About Image Viewer'),f'<h2>Bildbetrachter {APP_VERSION}</h2><p>Qt 6 / PySide6 · Goldisoft 2026</p><p>{self.tr("Bildanzeige und Bearbeitung mit Pillow.","Image viewing and editing powered by Pillow.")}</p>')
+    def preferences(self):
+        dlg=QDialog(self);dlg.setWindowTitle(self.tr('Einstellungen','Preferences'));form=QFormLayout(dlg)
+        language=QComboBox();language.addItem('Deutsch','de');language.addItem('English','en');language.setCurrentIndex(max(0,language.findData(self.lang)));form.addRow(self.tr('Sprache:','Language:'),language)
+        theme=QComboBox();theme.addItem('Blau (bunt)','blue');theme.addItem('Dunkel','dark');theme.addItem('Hell','light');theme.setCurrentIndex(max(0,theme.findData(self.theme)));form.addRow(self.tr('Design:','Theme:'),theme)
+        interval=QSpinBox();interval.setRange(1,60);interval.setSuffix(' Sekunden' if self.lang=='de' else ' seconds');interval.setValue(self.slideshow_interval);form.addRow(self.tr('Diashow – Bildwechsel alle:','Slideshow – change image every:'),interval)
+        buttons=QDialogButtonBox(QDialogButtonBox.Ok|QDialogButtonBox.Cancel);self.localize_buttons(buttons,accept=self.tr('Übernehmen','Apply'));form.addRow(buttons);buttons.accepted.connect(dlg.accept);buttons.rejected.connect(dlg.reject)
+        if dlg.exec():
+            self.slideshow_interval=interval.value();self.set_theme(theme.currentData());self.set_language(language.currentData());self.save_settings()
+    def print_image(self):
+        if self.path:subprocess.Popen(['xdg-open',self.path])
+    def wallpaper(self):
+        if self.path:self.status.showMessage(self.tr('Hintergrundbild: bitte über die Desktop-Einstellungen festlegen.','Set the wallpaper in your desktop settings.'),5000)
+    def keyPressEvent(self,e):
+        if e.key()==Qt.Key_Left:self.previous()
+        elif e.key()==Qt.Key_Right:self.next()
+        elif e.key()==Qt.Key_Escape and self.crop_mode:self.cancel_crop()
+        elif e.key()==Qt.Key_Escape and self.draw_mode:self.stop_draw()
+        elif e.key()==Qt.Key_Escape and self.isFullScreen():self.showNormal()
+        else:super().keyPressEvent(e)
+
+if __name__=='__main__':
+    # Use Qt's own file dialog instead of the desktop-native GTK/portal dialog,
+    # whose button labels can remain English regardless of the app language.
+    QApplication.setAttribute(Qt.AA_DontUseNativeDialogs, True)
+    app=QApplication(sys.argv); app.setApplicationName(APP_NAME); app.setApplicationVersion(APP_VERSION)
+    # Load Qt's German widget translations when available (Debian package:
+    # qt6-translations-l10n). Keep the translator alive for the app lifetime.
+    qt_translator = QTranslator(app)
+    translations_path = QLibraryInfo.path(QLibraryInfo.TranslationsPath)
+    if qt_translator.load('qtbase_de', translations_path):
+        app.installTranslator(qt_translator)
+    QLocale.setDefault(QLocale(QLocale.German, QLocale.Germany))
+    icon=Path(__file__).parent/'icons'/'bild_icon_128.png'
+    if icon.exists():app.setWindowIcon(QIcon(str(icon)))
+    w=ImageViewer();w.show();sys.exit(app.exec())
