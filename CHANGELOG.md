@@ -10,6 +10,8 @@
 - Bilder lassen sich über die normale Programmoberfläche öffnen.
 - Unterstützung für den Start über „Öffnen mit“ und die Dateizuordnung wurde eingebaut.
 - Die übergebene Bilddatei wird beim Programmstart geladen.
+- Die Speichern-Schaltfläche in der Symbolleiste verwendet jetzt „Speichern“ und überschreibt damit die geöffnete Originaldatei.
+- „Speichern unter“ bleibt separat und erstellt weiterhin eine neue Datei.
 
 ## 0.1.17
 - Fehler behoben: Der Farbauswahldialog im Zeichenmodus wurde wegen eines fehlenden `colorchooser`-Imports nicht geöffnet.

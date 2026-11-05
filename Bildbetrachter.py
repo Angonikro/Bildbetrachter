@@ -636,7 +636,7 @@ By Goldisoft 2026
         self._make_toolbar_icons()
 
         self.btn_open = ttk.Button(self.toolbar, style="Tool.TButton", command=self.open_image, image=self.toolbar_icons["open"], compound="top")
-        self.btn_save = ttk.Button(self.toolbar, style="Tool.TButton", command=self.save_image_as, image=self.toolbar_icons["save"], compound="top")
+        self.btn_save = ttk.Button(self.toolbar, style="Tool.TButton", command=self.save_image, image=self.toolbar_icons["save"], compound="top")
         self.btn_undo = ttk.Button(self.toolbar, style="Tool.TButton", command=self.undo, image=self.toolbar_icons["undo"], compound="top")
         self.btn_redo = ttk.Button(self.toolbar, style="Tool.TButton", command=self.redo, image=self.toolbar_icons["redo"], compound="top")
         self.btn_left = ttk.Button(self.toolbar, style="Tool.TButton", command=lambda: self.rotate(-90), image=self.toolbar_icons["left"], compound="top")
