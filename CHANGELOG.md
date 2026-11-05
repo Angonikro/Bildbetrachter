@@ -1,10 +1,18 @@
+## Changelog
+
+## 0.1.18 
+- Kontextmenü wird erst beim Loslassen der rechten Maustaste geöffnet.
+- Verhindert, dass das Loslassen des auslösenden Rechtsklicks direkt den obersten Menüeintrag auswählt.
+- Rechtsklick-Kontextmenü mit Bildnavigation, Speichern, Transformationen und Ansicht.
+- Virtuelle Vorschauliste: maximal 20 sichtbare/nahe Vorschaubilder gleichzeitig.
+- Dateiargumente werden beim Start geöffnet (Doppelklick/Öffnen mit).
+- Bildanzeige und Dateizuordnung
+- Bilder lassen sich über die normale Programmoberfläche öffnen.
+- Unterstützung für den Start über „Öffnen mit“ und die Dateizuordnung wurde eingebaut.
+- Die übergebene Bilddatei wird beim Programmstart geladen.
+
 ## 0.1.17
 - Fehler behoben: Der Farbauswahldialog im Zeichenmodus wurde wegen eines fehlenden `colorchooser`-Imports nicht geöffnet.
-
-## 0.1.16
-- Anleitung und Info-Dialog zeigen jetzt korrekt Version 0.1.16.
-
-# CHANGELOG
 
 ## v0.1.16
 - Einstellungen werden benutzerspezifisch unter `~/.config/bildbetrachter/settings.ini` gespeichert (XDG_CONFIG_HOME wird unterstützt).

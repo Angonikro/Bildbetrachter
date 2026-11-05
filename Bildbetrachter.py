@@ -3,6 +3,7 @@ import configparser
 import os
 import platform
 import subprocess
+import sys
 import tkinter as tk
 from pathlib import Path
 from datetime import datetime
@@ -12,7 +13,7 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageTk
 
 
 APP_NAME = "Bildbetrachter"
-APP_VERSION = "0.1.17"
+APP_VERSION = "0.1.18"
 SUPPORTED = {".bmp", ".dib", ".gif", ".jpg", ".jpeg", ".jpe", ".jfif", ".png", ".webp", ".tif", ".tiff", ".ico", ".ppm", ".pgm", ".pbm", ".pnm", ".xbm", ".xpm", ".tga", ".pcx"}
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "bildbetrachter"
 SETTINGS_FILE = CONFIG_DIR / "settings.ini"
@@ -23,7 +24,7 @@ LEGACY_LOCAL_SETTINGS_FILE = Path(__file__).resolve().parent / "settings.ini"
 class ImageViewerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title(APP_NAME)
+        self.root.title(f"{APP_NAME} {APP_VERSION}")
         self.root.geometry("1200x760")
         self.root.minsize(900, 600)
 
@@ -44,6 +45,9 @@ class ImageViewerApp:
         self.folder_index = -1
         self.thumbnails = []
         self.thumb_buttons = []
+        self._thumb_items = {}
+        self._thumb_max_cache = 20
+        self._thumb_refresh_job = None
         self.status_var = tk.StringVar(value="Kein Bild geöffnet")
         self.zoom_var = tk.StringVar(value="100 %")
         self.lang = "de"
@@ -217,7 +221,7 @@ class ImageViewerApp:
         frame = tk.Frame(dialog, bg=self.colors["bg"], padx=12, pady=12)
         frame.pack(fill="both", expand=True)
 
-        guide_de = """BILDBETRACHTER v0.1.17 – ANLEITUNG
+        guide_de = """BILDBETRACHTER v0.1.18 – ANLEITUNG
 
 1. Bilder öffnen
 Über Datei → Öffnen wählst du ein Bild aus. Das Bild wird im Hauptfenster angezeigt.
@@ -369,7 +373,7 @@ By Goldisoft 2026
 
         tk.Label(
             frame,
-            text=f"Bildbetrachter v0.1.17",
+            text=f"Bildbetrachter v{APP_VERSION}",
             font=("TkDefaultFont", 16, "bold"),
             bg=self.colors["bg"], fg=self.colors["fg"]
         ).pack(pady=(0, 10))
@@ -681,41 +685,16 @@ By Goldisoft 2026
         self.thumb_canvas.pack(side="left", fill="both", expand=True)
         self.thumb_scroll.pack(side="right", fill="y")
 
-        self.thumb_frame = ttk.Frame(self.thumb_canvas)
-        self.thumb_window = self.thumb_canvas.create_window((0, 0), window=self.thumb_frame, anchor="nw")
-        self.thumb_frame.bind(
-            "<Configure>",
-            lambda e: self.thumb_canvas.configure(scrollregion=self.thumb_canvas.bbox("all"))
-        )
-        self.thumb_canvas.bind(
-            "<Configure>",
-            lambda e: self.thumb_canvas.itemconfigure(self.thumb_window, width=e.width)
-        )
+        # Virtuelle Vorschauleiste: Es existieren nur sichtbare Karten plus Puffer.
+        self._thumb_row_height = 112
+        self.thumb_canvas.bind("<Configure>", lambda _e: self._schedule_thumb_refresh())
+        self.thumb_canvas.bind("<MouseWheel>", self._on_thumb_scroll)
+        self.thumb_canvas.bind("<Button-4>", self._on_thumb_scroll)
+        self.thumb_canvas.bind("<Button-5>", self._on_thumb_scroll)
+        self.thumb_canvas.bind("<ButtonRelease-1>", lambda _e: self._schedule_thumb_refresh())
 
-        # Mausrad für die komplette Miniaturbild-Leiste aktivieren.
-        # Die Bindings werden auch an die Vorschau-Buttons gesetzt, damit
-        # das Scrollen funktioniert, wenn der Mauszeiger direkt über einem Bild steht.
-        def _scroll_thumbnails(event):
-            if getattr(event, "num", None) == 4:
-                self.thumb_canvas.yview_scroll(-3, "units")
-            elif getattr(event, "num", None) == 5:
-                self.thumb_canvas.yview_scroll(3, "units")
-            elif getattr(event, "delta", 0):
-                # Windows/macOS: delta ist ein Vielfaches von 120.
-                steps = int(-event.delta / 120)
-                if steps == 0:
-                    steps = -1 if event.delta > 0 else 1
-                self.thumb_canvas.yview_scroll(steps, "units")
-            return "break"
-
-        self.thumb_canvas.bind("<MouseWheel>", _scroll_thumbnails)
-        self.thumb_canvas.bind("<Button-4>", _scroll_thumbnails)
-        self.thumb_canvas.bind("<Button-5>", _scroll_thumbnails)
-        self.thumb_frame.bind("<MouseWheel>", _scroll_thumbnails)
-        self.thumb_frame.bind("<Button-4>", _scroll_thumbnails)
-        self.thumb_frame.bind("<Button-5>", _scroll_thumbnails)
-
-        self._scroll_thumbnails = _scroll_thumbnails
+        # Scrollen aktualisiert nur das kleine sichtbare Vorschaufenster.
+        self._scroll_thumbnails = self._on_thumb_scroll
 
         # Informationsbereich: standardmäßig verborgen. Er wird nur über
         # Datei → Bildinformationen eingeblendet und bleibt anschließend
@@ -765,6 +744,9 @@ By Goldisoft 2026
         self.canvas.bind("<Button-5>", self.on_mouse_wheel)
         self.canvas.bind("<ButtonPress-1>", self.pan_start)
         self.canvas.bind("<B1-Motion>", self.pan_move)
+        # Erst beim Loslassen öffnen: So kann das Loslassen desselben
+        # Rechtsklicks keinen Menüeintrag versehentlich aktivieren (X11/Tk).
+        self.canvas.bind("<ButtonRelease-3>", self.show_context_menu)
 
         self.crop_start = None
         self.crop_rect = None
@@ -842,7 +824,7 @@ By Goldisoft 2026
     def retranslate(self):
         de = self.lang == "de"
 
-        self.root.title("Bildbetrachter" if de else "Image Viewer")
+        self.root.title(f"Bildbetrachter {APP_VERSION}" if de else f"Image Viewer {APP_VERSION}")
         self.rebuild_menu()
         self.apply_theme()
 
@@ -1594,85 +1576,151 @@ By Goldisoft 2026
 
     # ---------- Folder navigation / thumbnails ----------
 
+    def _on_thumb_scroll(self, event):
+        if getattr(event, "num", None) == 4:
+            self.thumb_canvas.yview_scroll(-3, "units")
+        elif getattr(event, "num", None) == 5:
+            self.thumb_canvas.yview_scroll(3, "units")
+        elif getattr(event, "delta", 0):
+            steps = int(-event.delta / 120) or (-1 if event.delta > 0 else 1)
+            self.thumb_canvas.yview_scroll(steps * 3, "units")
+        self._schedule_thumb_refresh()
+        return "break"
+
+    def _schedule_thumb_refresh(self):
+        if self._thumb_refresh_job is None:
+            try:
+                self._thumb_refresh_job = self.root.after(80, self._refresh_visible_thumbnails)
+            except tk.TclError:
+                self._thumb_refresh_job = None
+
+    def _refresh_visible_thumbnails(self):
+        self._thumb_refresh_job = None
+        if not self.thumb_canvas.winfo_exists():
+            return
+        count = len(self.folder_images)
+        row_h = self._thumb_row_height
+        width = max(140, self.thumb_canvas.winfo_width())
+        height = max(row_h, self.thumb_canvas.winfo_height())
+        self.thumb_canvas.configure(scrollregion=(0, 0, width, count * row_h))
+        if not count:
+            wanted = set()
+        else:
+            first = max(0, int(self.thumb_canvas.canvasy(0) // row_h))
+            visible = max(1, (height // row_h) + 2)
+            slots = min(self._thumb_max_cache, visible)
+            first = min(first, max(0, count - slots))
+            wanted = set(range(first, min(count, first + slots)))
+
+        for index in list(self._thumb_items):
+            if index not in wanted:
+                item, widget, _photo = self._thumb_items.pop(index)
+                try:
+                    self.thumb_canvas.delete(item)
+                    widget.destroy()
+                except tk.TclError:
+                    pass
+
+        for index in sorted(wanted):
+            if index in self._thumb_items:
+                item, widget, photo = self._thumb_items[index]
+                self.thumb_canvas.coords(item, 0, index * row_h)
+                self.thumb_canvas.itemconfigure(item, width=width)
+                continue
+            path = self.folder_images[index]
+            try:
+                with Image.open(path) as source:
+                    dimensions = source.size
+                    source.thumbnail((118, 88), Image.Resampling.LANCZOS)
+                    preview = source.convert("RGB")
+                photo = ImageTk.PhotoImage(preview)
+                preview.close()
+                card = ttk.Frame(self.thumb_canvas, style="Sidebar.TFrame")
+                image_button = ttk.Button(card, image=photo, command=lambda p=path: self.load_image(p))
+                image_button.pack(side="left", padx=4, pady=3)
+                info = ttk.Frame(card, style="Sidebar.TFrame")
+                info.pack(side="left", fill="both", expand=True)
+                name = Path(path).name
+                ttk.Label(info, text=(name if len(name) < 30 else name[:27] + "…"),
+                          style="ThumbName.TLabel", wraplength=165).pack(anchor="w", pady=(8, 3))
+                try:
+                    size = Path(path).stat().st_size
+                    size_text = f"{size/1048576:.1f} MB" if size >= 1048576 else f"{size/1024:.1f} KB"
+                except OSError:
+                    size_text = "?"
+                ttk.Label(info, text=f"{dimensions[0]} × {dimensions[1]} px  ·  {size_text}",
+                          style="ThumbInfo.TLabel").pack(anchor="w")
+                item = self.thumb_canvas.create_window((0, index * row_h), window=card,
+                                                       anchor="nw", width=width, height=row_h-3)
+                self._thumb_items[index] = (item, card, photo)
+            except (OSError, ValueError, tk.TclError):
+                continue
+        # Strikte Obergrenze: nie mehr als 20 Vorschaubild-Widgets/PhotoImages.
+        while len(self._thumb_items) > self._thumb_max_cache:
+            old = next(iter(self._thumb_items))
+            item, widget, _photo = self._thumb_items.pop(old)
+            self.thumb_canvas.delete(item)
+            widget.destroy()
+
     def build_thumbnails(self):
-        for child in self.thumb_frame.winfo_children():
-            child.destroy()
+        if self._thumb_refresh_job is not None:
+            try: self.root.after_cancel(self._thumb_refresh_job)
+            except tk.TclError: pass
+            self._thumb_refresh_job = None
+        for item, widget, _photo in list(self._thumb_items.values()):
+            try:
+                self.thumb_canvas.delete(item)
+                widget.destroy()
+            except tk.TclError:
+                pass
+        self._thumb_items.clear()
         self.thumbnails.clear()
         self.thumb_buttons.clear()
+        self.thumb_canvas.yview_moveto(0)
+        self.thumb_canvas.configure(scrollregion=(0, 0, max(1, self.thumb_canvas.winfo_width()),
+                                                  len(self.folder_images) * self._thumb_row_height))
+        self._schedule_thumb_refresh()
 
-        for index, path in enumerate(self.folder_images):
-            try:
-                with Image.open(path) as source_img:
-                    width, height = source_img.size
-                    img = source_img.convert("RGB")
-                    img.thumbnail((145, 100), Image.Resampling.LANCZOS)
-
-                photo = ImageTk.PhotoImage(img)
-                self.thumbnails.append(photo)
-
-                # Kompakte Bildkarte: Vorschau links, Dateiname und
-                # Bildabmessungen/Dateigröße rechts daneben.
-                card = ttk.Frame(self.thumb_frame, style="Sidebar.TFrame")
-                card.pack(fill="x", padx=2, pady=3)
-
-                btn = ttk.Button(
-                    card,
-                    image=photo,
-                    command=lambda p=path: self.load_image(p),
-                )
-                btn.pack(side="left", padx=(2, 8), pady=2)
-
-                try:
-                    size_bytes = Path(path).stat().st_size
-                    if size_bytes < 1024:
-                        file_size = f"{size_bytes} B"
-                    elif size_bytes < 1024 * 1024:
-                        file_size = f"{size_bytes / 1024:.1f} KB"
-                    else:
-                        file_size = f"{size_bytes / (1024 * 1024):.1f} MB"
-                except OSError:
-                    file_size = "?"
-
-                name = Path(path).name
-                # Sehr lange Dateinamen bleiben lesbar, ohne die Seitenleiste
-                # unnötig zu verbreitern.
-                if len(name) > 22:
-                    name = name[:19] + "..."
-
-                info_frame = ttk.Frame(card, style="Sidebar.TFrame")
-                info_frame.pack(side="left", fill="both", expand=True, pady=4)
-
-                name_label = ttk.Label(
-                    info_frame, text=name, style="ThumbName.TLabel",
-                    wraplength=135, anchor="w"
-                )
-                name_label.pack(fill="x", pady=(4, 6))
-
-                details = (
-                    f"{width} × {height} Pixel\n"
-                    f"{file_size}"
-                )
-                detail_label = ttk.Label(
-                    info_frame, text=details, style="ThumbInfo.TLabel",
-                    anchor="w"
-                )
-                detail_label.pack(fill="x")
-
-                # Klick auf die Informationsbeschriftung soll ebenfalls
-                # das zugehörige Bild öffnen.
-                name_label.bind("<Button-1>", lambda _e, p=path: self.load_image(p))
-                detail_label.bind("<Button-1>", lambda _e, p=path: self.load_image(p))
-                info_frame.bind("<Button-1>", lambda _e, p=path: self.load_image(p))
-
-                # Mausrad über der gesamten Bildkarte.
-                for widget in (card, btn, info_frame, name_label, detail_label):
-                    widget.bind("<MouseWheel>", self._scroll_thumbnails, add="+")
-                    widget.bind("<Button-4>", self._scroll_thumbnails, add="+")
-                    widget.bind("<Button-5>", self._scroll_thumbnails, add="+")
-
-                self.thumb_buttons.append(btn)
-            except Exception:
-                continue
+    def show_context_menu(self, event):
+        if self.draw_mode:
+            self._draw_cancel_event(event)
+            return "break"
+        menu = tk.Menu(self.root, tearoff=0)
+        de = self.lang == "de"
+        menu.add_command(label="Bild öffnen…" if de else "Open image…", command=self.open_image)
+        menu.add_command(label="Vorheriges Bild" if de else "Previous image", command=self.previous_image,
+                         state="normal" if self.folder_images else "disabled")
+        menu.add_command(label="Nächstes Bild" if de else "Next image", command=self.next_image,
+                         state="normal" if self.folder_images else "disabled")
+        menu.add_separator()
+        menu.add_command(label="Speichern" if de else "Save", command=self.save_image,
+                         state="normal" if self.image is not None else "disabled")
+        menu.add_command(label="Speichern unter…" if de else "Save as…", command=self.save_image_as,
+                         state="normal" if self.image is not None else "disabled")
+        menu.add_separator()
+        menu.add_command(label="90° links drehen" if de else "Rotate left", command=lambda: self.rotate(-90),
+                         state="normal" if self.image is not None else "disabled")
+        menu.add_command(label="90° rechts drehen" if de else "Rotate right", command=lambda: self.rotate(90),
+                         state="normal" if self.image is not None else "disabled")
+        menu.add_command(label="Horizontal spiegeln" if de else "Flip horizontal", command=self.mirror_horizontal,
+                         state="normal" if self.image is not None else "disabled")
+        menu.add_command(label="Vertikal spiegeln" if de else "Flip vertical", command=self.mirror_vertical,
+                         state="normal" if self.image is not None else "disabled")
+        menu.add_separator()
+        menu.add_command(label="An Fenster anpassen" if de else "Fit to window", command=self.fit_to_window,
+                         state="normal" if self.image is not None else "disabled")
+        menu.add_command(label="Originalgröße (100 %)" if de else "Actual size (100%)", command=self.zoom_100,
+                         state="normal" if self.image is not None else "disabled")
+        menu.add_separator()
+        menu.add_command(label="Bildinformationen / Eigenschaften" if de else "Image information / Properties",
+                         command=self.show_image_information,
+                         state="normal" if self.image is not None else "disabled")
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try: menu.grab_release()
+            except tk.TclError: pass
+        return "break"
 
     def previous_image(self):
         if not self.folder_images:
@@ -2126,5 +2174,9 @@ By Goldisoft 2026
 if __name__ == "__main__":
     root = tk.Tk()
     app = ImageViewerApp(root)
-    root.after(150, app.fit_to_window)
+    if len(sys.argv) > 1:
+        incoming = sys.argv[1]
+        root.after(100, lambda p=incoming: (app.load_image(p), app.fit_to_window()))
+    else:
+        root.after(150, app.fit_to_window)
     root.mainloop()
